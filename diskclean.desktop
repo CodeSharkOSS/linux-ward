@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Disk Cleaner
+Comment=Free disk space and remove packages
+Exec=diskclean
+Icon=drive-harddisk
+Terminal=false
+Categories=System;Utility;
+Keywords=disk;clean;cache;packages;space;
+StartupWMClass=diskclean
