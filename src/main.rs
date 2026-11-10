@@ -7,6 +7,7 @@ mod java;
 mod perf;
 mod pkg;
 mod ports;
+mod procscan;
 mod secscan;
 mod services;
 mod targets;

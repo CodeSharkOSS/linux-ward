@@ -15,6 +15,7 @@ mod dupes_ui;
 mod java_ui;
 mod large_ui;
 mod nav;
+mod procs_ui;
 use nav::Tab;
 mod packages_ui;
 mod perf_ui;
@@ -43,6 +44,7 @@ enum Msg {
     DevRepos(Vec<crate::devclean::Repo>),
     DevDone,
     Ports(Result<Vec<crate::ports::Listener>, String>),
+    Procs(Box<crate::procscan::ScanResult>),
     Security(Vec<crate::secscan::Finding>, usize),
     Perf(Box<perf::Snapshot>),
     Java(Box<java::JavaReport>),
@@ -206,6 +208,11 @@ pub struct App {
     ports_loaded: bool,
     ports_loading: bool,
     ports_error: Option<String>,
+    procs: Vec<crate::procscan::Suspect>,
+    procs_scanning: bool,
+    procs_scanned: bool,
+    procs_inspected: usize,
+    procs_opaque: usize,
     sec_scanned: usize,
 
     perf: Option<perf::Snapshot>,
@@ -295,6 +302,11 @@ impl App {
             ports_loaded: false,
             ports_loading: false,
             ports_error: None,
+            procs: vec![],
+            procs_scanning: false,
+            procs_scanned: false,
+            procs_inspected: 0,
+            procs_opaque: 0,
             sec_scanned: 0,
             perf: None,
             perf_loading: false,
@@ -490,6 +502,7 @@ impl App {
                         Err(e) => self.ports_error = Some(e),
                     }
                 }
+                Msg::Procs(r) => self.apply_procs(*r),
                 Msg::Perf(p) => {
                     self.perf_loading = false;
                     let alive: HashSet<&String> = p.kernels.iter().map(|k| &k.version).collect();
@@ -559,6 +572,7 @@ impl App {
                     self.dupes.retain(|g| g.files.len() > 1);
                     self.dev_prune();
                     self.ports_loaded = false;
+                    self.procs_scanned = false;
                     self.sec
                         .retain(|e| std::fs::symlink_metadata(&e.f.path).is_ok());
                     if refresh {
@@ -620,6 +634,7 @@ impl eframe::App for App {
             Tab::Security => self.security_tab(ui),
             Tab::Projects => self.projects_tab(ui),
             Tab::Ports => self.ports_tab(ui),
+            Tab::Processes => self.processes_tab(ui),
             Tab::Performance => self.performance_tab(ui),
             Tab::Services => self.services_tab(ui),
             Tab::Java => self.java_tab(ui),

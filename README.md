@@ -11,7 +11,7 @@ The tabs are grouped into four sections along the top:
 | 💾 Free space | Quick clean · Large files · Duplicates |
 | 📦 Software | Packages · Services |
 | 🛠 Developer | Dev cleanup · Open ports · Java |
-| 🩺 Health & security | Health & speed · Security |
+| 🩺 Health & security | Health & speed · Security · Suspect processes |
 
 **Quick clean**
 - Disk usage bars for every real mounted filesystem.
@@ -50,6 +50,10 @@ The tabs are grouped into four sections along the top:
 
 **Open ports**
 - Lists TCP ports something is listening on, which process owns them, and whether they're reachable from the network or only locally. Stop your own leftover dev servers with one click (SIGTERM, after a confirmation).
+
+**Suspect processes**
+- Ranks running programs by how unusual they look and says why. Signals: executable running from `/tmp`, `/dev/shm` or memory only; a deleted program file that is still running; a name imitating `sshd`, `systemd` and similar from the wrong place; binaries no installed package owns; shells whose input/output is a TCP connection; `LD_PRELOAD` injection; crypto-miner names and pool ports; processes hidden from the process list; and startup entries (cron, systemd, autostart) that download-and-run or run from hidden/temp folders.
+- These are hints, not verdicts. Known-benign cases (AppImages, packaged updates, tools in `~/.local`, `~/.cargo` and similar) score low. Processes of other users are only partly visible without root. Actions: open the folder, scan the file with ClamAV (if installed), copy details, stop your own processes. Nothing is stopped automatically.
 
 **Health & speed**
 - Live CPU, memory and I/O pressure, boot-time analysis, and recommendations with one-click fixes.
