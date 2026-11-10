@@ -25,8 +25,9 @@ pub struct Suspect {
     pub cmdline: String,
     pub score: u32,
     pub reasons: Vec<String>,
-    /// Owned by the current user, so it can be stopped without root.
-    pub mine: bool,
+    /// Numeric owner (`u32::MAX` when unknown). Compare with the viewer's uid to know whether
+    /// stopping it needs administrator rights.
+    pub uid: u32,
 }
 
 impl Suspect {
@@ -422,6 +423,7 @@ fn gather(pid: u32, my_uid: u32) -> Option<ProcInfo> {
     })
 }
 
+#[derive(Clone, Debug, Default)]
 pub struct ScanResult {
     pub suspects: Vec<Suspect>,
     pub inspected: usize,
@@ -498,7 +500,7 @@ pub fn scan() -> ScanResult {
                 cmdline: p.cmdline.chars().take(300).collect(),
                 score,
                 reasons,
-                mine: p.uid == my_uid,
+                uid: p.uid,
             })
         })
         .collect();
@@ -549,7 +551,7 @@ fn hidden_pids() -> Vec<Suspect> {
                 "Responds at /proc/<pid> but is missing from the process list (hidden from ps/top)"
                     .into(),
             ],
-            mine: false,
+            uid: u32::MAX,
         })
         .collect()
 }
@@ -642,16 +644,105 @@ fn startup_entries(home: &str) -> Vec<Suspect> {
                         ""
                     }
                 )],
-                mine: false,
+                uid: u32::MAX,
             });
         }
     }
     out
 }
 
+// ---------------------------------------------------------------------------------------------
+// Passing results from an administrator-run scan back to the window
+// ---------------------------------------------------------------------------------------------
+
+fn clean(s: &str) -> String {
+    s.replace(['\t', '\n', '\r', '\u{1f}'], " ")
+}
+
+/// One line per suspect, tab-separated, so no serialisation library is needed.
+pub fn encode(r: &ScanResult) -> String {
+    let mut out = format!("H\t{}\t{}\n", r.inspected, r.opaque);
+    for s in &r.suspects {
+        out.push_str(&format!(
+            "S\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            s.pid.map_or("-".to_string(), |p| p.to_string()),
+            s.score,
+            s.uid,
+            clean(&s.name),
+            clean(&s.exe),
+            clean(&s.user),
+            clean(&s.cmdline),
+            s.reasons
+                .iter()
+                .map(|r| clean(r))
+                .collect::<Vec<_>>()
+                .join("\u{1f}"),
+        ));
+    }
+    out
+}
+
+/// Reads `encode` output; unrelated lines (pkexec chatter, the command echo) are ignored.
+pub fn decode(text: &str) -> Option<ScanResult> {
+    let mut r = ScanResult::default();
+    let mut got_header = false;
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        match f.first().copied() {
+            Some("H") if f.len() == 3 => {
+                r.inspected = f[1].parse().ok()?;
+                r.opaque = f[2].parse().ok()?;
+                got_header = true;
+            }
+            Some("S") if f.len() == 9 => r.suspects.push(Suspect {
+                pid: f[1].parse().ok(),
+                score: f[2].parse().ok()?,
+                uid: f[3].parse().ok()?,
+                name: f[4].into(),
+                exe: f[5].into(),
+                user: f[6].into(),
+                cmdline: f[7].into(),
+                reasons: f[8]
+                    .split('\u{1f}')
+                    .filter(|x| !x.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            }),
+            _ => {}
+        }
+    }
+    got_header.then_some(r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn results_survive_the_trip_through_text() {
+        let r = ScanResult {
+            inspected: 12,
+            opaque: 3,
+            suspects: vec![Suspect {
+                pid: Some(42),
+                name: "we\tird".into(),
+                exe: "/tmp/x (deleted)".into(),
+                user: "root".into(),
+                cmdline: "a\nb c".into(),
+                score: 85,
+                reasons: vec!["one".into(), "two; three".into()],
+                uid: 0,
+            }],
+        };
+        let text = format!("# pkexec noise\n{}garbage\n", encode(&r));
+        let back = decode(&text).unwrap();
+        assert_eq!((back.inspected, back.opaque), (12, 3));
+        let s = &back.suspects[0];
+        assert_eq!((s.pid, s.score, s.uid), (Some(42), 85, 0));
+        assert_eq!(s.reasons, vec!["one", "two; three"]);
+        assert_eq!(s.name, "we ird");
+        assert!(decode("no header here").is_none());
+    }
 
     fn p(name: &str, exe: &str) -> ProcInfo {
         ProcInfo {

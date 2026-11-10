@@ -211,6 +211,7 @@ pub struct App {
     procs: Vec<crate::procscan::Suspect>,
     procs_scanning: bool,
     procs_scanned: bool,
+    procs_elevated: bool,
     procs_inspected: usize,
     procs_opaque: usize,
     sec_scanned: usize,
@@ -305,6 +306,7 @@ impl App {
             procs: vec![],
             procs_scanning: false,
             procs_scanned: false,
+            procs_elevated: false,
             procs_inspected: 0,
             procs_opaque: 0,
             sec_scanned: 0,
@@ -572,7 +574,8 @@ impl App {
                     self.dupes.retain(|g| g.files.len() > 1);
                     self.dev_prune();
                     self.ports_loaded = false;
-                    self.procs_scanned = false;
+                    // A scan that needed a password is not repeated behind the user's back.
+                    self.procs_scanned = self.procs_elevated;
                     self.sec
                         .retain(|e| std::fs::symlink_metadata(&e.f.path).is_ok());
                     if refresh {

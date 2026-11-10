@@ -24,6 +24,20 @@ fn main() -> eframe::Result {
         );
         return Ok(());
     }
+    // Internal: the suspect-process scan, run as root by the window via pkexec.
+    if std::env::args().any(|a| a == "--proc-scan") {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(h) = args
+            .iter()
+            .position(|a| a == "--home")
+            .and_then(|i| args.get(i + 1))
+        {
+            // SAFETY: nothing else is running yet, so no other thread can be reading the environment.
+            unsafe { std::env::set_var("HOME", h) };
+        }
+        print!("{}", procscan::encode(&procscan::scan()));
+        return Ok(());
+    }
     if std::env::args().any(|a| a == "--clean") {
         clean_cli(std::env::args().any(|a| a == "--dry-run"));
         return Ok(());

@@ -5,10 +5,40 @@ use crate::procscan::{self, Level, ScanResult, Suspect};
 use crate::targets::Action;
 
 impl App {
-    fn start_proc_scan(&mut self) {
+    /// Scan as the current user, or (elevated) as root through pkexec so that processes of
+    /// other users can be inspected too. The root run is this same program in `--proc-scan` mode.
+    fn start_proc_scan(&mut self, elevated: bool) {
         self.procs_scanning = true;
+        self.procs_elevated = elevated;
         let n = self.notifier();
-        std::thread::spawn(move || n.send(Msg::Procs(Box::new(procscan::scan()))));
+        if !elevated {
+            std::thread::spawn(move || n.send(Msg::Procs(Box::new(procscan::scan()))));
+            return;
+        }
+        let exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "diskclean".into());
+        let home = util::home().display().to_string();
+        std::thread::spawn(move || {
+            let out =
+                util::run_privileged(&[vec![exe, "--proc-scan".into(), "--home".into(), home]]);
+            match procscan::decode(&out.stdout) {
+                Some(r) => n.send(Msg::Procs(Box::new(r))),
+                None => {
+                    let why = if out.stderr.trim().is_empty() {
+                        out.combined()
+                    } else {
+                        out.stderr.clone()
+                    };
+                    n.send(Msg::Log(format!(
+                        "✘ Administrator scan failed: {}",
+                        why.lines().next().unwrap_or("no result")
+                    )));
+                    // Fall back to what the current user can see.
+                    n.send(Msg::Procs(Box::new(procscan::scan())));
+                }
+            }
+        });
     }
 
     pub(super) fn apply_procs(&mut self, r: ScanResult) {
@@ -56,9 +86,10 @@ impl App {
 
     pub(super) fn processes_tab(&mut self, ui: &mut egui::Ui) {
         if !self.procs_scanned && !self.procs_scanning {
-            self.start_proc_scan();
+            self.start_proc_scan(false);
         }
         let mut rescan = false;
+        let mut elevate = false;
         let mut stop: Option<Suspect> = None;
         let mut clam: Option<String> = None;
 
@@ -87,7 +118,12 @@ impl App {
                 .size(12.0),
         );
         if self.procs_opaque > 0 {
-            ui.label(RichText::new(format!("ℹ {} processes belong to other users and can't be fully inspected without administrator rights.", self.procs_opaque)).weak().size(12.0));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("ℹ {} processes belong to other users and can't be fully inspected without administrator rights.", self.procs_opaque)).weak().size(12.0));
+                if !self.procs_scanning && ui.small_button("🔒 Scan all processes…").on_hover_text("Asks for your password once and runs this scan as administrator. Read-only: nothing is changed.").clicked() {
+                    elevate = true;
+                }
+            });
         }
         ui.separator();
 
@@ -173,8 +209,7 @@ impl App {
                                         s.cmdline
                                     ));
                                 }
-                                if s.mine
-                                    && s.pid.is_some()
+                                if s.pid.is_some()
                                     && ui
                                         .add_enabled(
                                             self.busy.is_none(),
@@ -190,8 +225,11 @@ impl App {
                 }
             });
 
-        if rescan {
-            self.start_proc_scan();
+        if elevate {
+            self.start_proc_scan(true);
+        } else if rescan {
+            // Scanning again keeps the access level of the last scan.
+            self.start_proc_scan(self.procs_elevated);
         }
         if let Some(p) = clam {
             self.clam_scan(p);
@@ -199,10 +237,18 @@ impl App {
         if let Some(s) = stop
             && let Some(pid) = s.pid
         {
+            let kill = vec!["kill".to_string(), pid.to_string()];
+            // SAFETY: geteuid has no preconditions.
+            let own_uid = unsafe { libc::geteuid() };
             self.confirm = Some(Confirm::Perf {
                 title: format!("Stop {} (pid {pid})", s.name),
                 note: Some("Sends SIGTERM so the program can shut down. If it is malware, stopping it is not enough: find and remove what starts it (see its reasons) and change any passwords it could have seen.".into()),
-                actions: vec![Action::User(vec![vec!["kill".into(), pid.to_string()]])],
+                actions: vec![if s.uid == own_uid {
+                    Action::User(vec![kill])
+                } else {
+                    // Another user's process (or an unknown owner): needs administrator rights.
+                    Action::Root(vec![kill])
+                }],
             });
         }
     }
