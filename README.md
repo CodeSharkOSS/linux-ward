@@ -12,7 +12,7 @@ A small Linux desktop app, written in Rust with [egui/eframe](https://github.com
   - Package manager cache (`apt-get clean`, `dnf clean all`, `paccache`, `zypper clean`)
   - Unused dependencies / orphaned packages (with the list and per-package size)
   - Unused Flatpak runtimes and disabled Snap revisions
-  - Developer caches: Cargo registry, npm, Go, Gradle, Maven, pnpm, Conda, NuGet, Bundler, unused Docker/Podman images, containers and build cache (volumes are never removed)
+  - Developer caches: Cargo registry, npm, Go, Gradle, Maven, pnpm, Conda, NuGet, Bundler, Android, unused Docker/Podman images, containers and build cache (volumes are never removed)
 - Everything that needs root is batched into **one** password prompt via `pkexec`.
 
 **Packages tab**
@@ -35,6 +35,8 @@ A small Linux desktop app, written in Rust with [egui/eframe](https://github.com
 **Projects tab** (for developers)
 - **Build artifacts:** scans a code folder for regenerable output (Rust/Maven `target/`, `node_modules/`, Gradle/CMake `build/`, Python virtualenvs and caches, Composer `vendor/`, .NET `bin/`/`obj/`) and shows size and days idle. "Select untouched for over N days" picks the stale ones. Each folder is only listed when a marker file proves it is generated, so an unrelated folder called `target` is never touched.
 - **Language toolchains:** old versions from rustup, nvm, SDKMAN and pyenv; the one in use is protected.
+- **IDE leftovers:** every JetBrains IDE and Android Studio upgrade leaves the previous version's settings, plugins and caches behind (`~/.config`, `~/.cache`, `~/.local/share`). Each product's newest version is kept; older ones are listed together with their size. JetBrains Toolbox's own app folder is left alone because Toolbox manages it.
+- **Android SDK:** older platforms, build-tools and NDKs (newest kept), system images (protected while a virtual device uses them) and emulator devices (the `.avd` folder and its `.ini`). Found via `ANDROID_HOME`, `ANDROID_SDK_ROOT` or `~/Android/Sdk`.
 - **Git repositories:** compact with `git gc` and delete merged branches (`git branch -d`, which refuses unmerged ones).
 
 **Ports tab**

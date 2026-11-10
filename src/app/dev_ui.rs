@@ -1,7 +1,7 @@
 //! The Projects tab (build artifacts, stale toolchains, git housekeeping) and the Ports tab.
 
 use super::*;
-use crate::devclean::{self, Artifact, Removal, Repo, Toolchain};
+use crate::devclean::{self, Artifact, Repo, Toolchain};
 use crate::ports::{self, Listener};
 use crate::targets::Action;
 
@@ -33,11 +33,15 @@ impl RepoEntry {
 }
 
 fn toolchain_present(t: &Toolchain) -> bool {
-    match &t.removal {
-        Removal::Dir(p) => p.exists(),
-        Removal::Cmd(c) => c
-            .last()
-            .is_some_and(|n| util::home().join(".rustup/toolchains").join(n).exists()),
+    if t.removal.dirs.is_empty() {
+        // rustup toolchains are removed by command: check the folder it manages.
+        t.removal
+            .cmds
+            .first()
+            .and_then(|c| c.last())
+            .is_some_and(|n| util::home().join(".rustup/toolchains").join(n).exists())
+    } else {
+        t.removal.dirs.iter().any(|p| p.exists())
     }
 }
 
@@ -148,7 +152,7 @@ impl App {
             egui::CollapsingHeader::new(RichText::new(format!("🧰 Language toolchains ({} · {})", self.dev_tc.len(), human(tc_total))).strong())
                 .default_open(true)
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Installed versions from rustup, nvm, SDKMAN and pyenv. The one in use is protected; remove versions you no longer build with.").weak().size(12.0));
+                    ui.label(RichText::new("Old versions of rustup, nvm, SDKMAN and pyenv toolchains; IDE settings, plugins and caches left behind by earlier JetBrains / Android Studio versions; and Android SDK platforms, build-tools, NDKs, system images and emulator devices. The newest version, or one in use, is protected. Old IDE folders hold that version's own settings: the newest version imported them when it first ran.").weak().size(12.0));
                     for e in &mut self.dev_tc {
                         ui.horizontal(|ui| {
                             ui.add_enabled(!e.t.current, egui::Checkbox::without_text(&mut e.sel)).on_disabled_hover_text("In use / default");
@@ -194,10 +198,8 @@ impl App {
                 .collect();
             let mut cmds: Vec<Vec<String>> = Vec::new();
             for e in self.dev_tc.iter().filter(|e| e.sel && !e.t.current) {
-                match &e.t.removal {
-                    Removal::Dir(p) => dirs.push(p.clone()),
-                    Removal::Cmd(c) => cmds.push(c.clone()),
-                }
+                dirs.extend(e.t.removal.dirs.iter().cloned());
+                cmds.extend(e.t.removal.cmds.iter().cloned());
             }
             for r in &self.dev_repos {
                 if r.gc {

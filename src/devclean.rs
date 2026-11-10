@@ -160,10 +160,20 @@ pub fn scan_artifacts(root: &Path) -> Vec<Artifact> {
 // Toolchains
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Clone, Debug)]
-pub enum Removal {
-    Dir(PathBuf),
-    Cmd(Vec<String>),
+/// What removing a toolchain involves: folders to delete and/or commands to run.
+#[derive(Clone, Debug, Default)]
+pub struct Removal {
+    pub dirs: Vec<PathBuf>,
+    pub cmds: Vec<Vec<String>>,
+}
+
+impl Removal {
+    fn dir(p: PathBuf) -> Self {
+        Removal {
+            dirs: vec![p],
+            cmds: vec![],
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -218,7 +228,7 @@ pub fn toolchains() -> Vec<Toolchain> {
             name: name.clone(),
             size: dir_usage(path),
             current,
-            removal: Removal::Dir(path.clone()),
+            removal: Removal::dir(path.clone()),
         });
     }
 
@@ -238,7 +248,7 @@ pub fn toolchains() -> Vec<Toolchain> {
                 name: format!("{cand} {ver}"),
                 size: dir_usage(&vpath),
                 current: current.as_deref() == Some(ver.as_str()),
-                removal: Removal::Dir(vpath),
+                removal: Removal::dir(vpath),
             });
         }
     }
@@ -252,9 +262,12 @@ pub fn toolchains() -> Vec<Toolchain> {
             name: ver,
             size: dir_usage(&vpath),
             current,
-            removal: Removal::Dir(vpath),
+            removal: Removal::dir(vpath),
         });
     }
+
+    out.extend(ide_leftovers());
+    out.extend(android_sdk());
 
     // rustup
     if crate::util::which("rustup") {
@@ -273,13 +286,178 @@ pub fn toolchains() -> Vec<Toolchain> {
                 name: name.to_string(),
                 size: dir_usage(&dir),
                 current,
-                removal: Removal::Cmd(vec![
-                    "rustup".into(),
-                    "toolchain".into(),
-                    "uninstall".into(),
-                    name.to_string(),
-                ]),
+                removal: Removal {
+                    dirs: vec![],
+                    cmds: vec![vec![
+                        "rustup".into(),
+                        "toolchain".into(),
+                        "uninstall".into(),
+                        name.to_string(),
+                    ]],
+                },
             });
+        }
+    }
+    out
+}
+
+/// "IntelliJIdea2026.2" → ("IntelliJIdea", "2026.2"). Folders without a version are not IDE profiles.
+fn split_ide_name(name: &str) -> Option<(&str, &str)> {
+    let i = name.find(|c: char| c.is_ascii_digit())?;
+    let (product, ver) = name.split_at(i);
+    let ok = !product.is_empty()
+        && ver.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && ver.contains('.');
+    ok.then_some((product, ver))
+}
+
+/// Settings, plugins and caches that JetBrains IDEs and Android Studio keep per version.
+/// Each upgrade leaves the previous version's folders behind; the newest of each product is kept.
+fn ide_leftovers() -> Vec<Toolchain> {
+    use std::collections::BTreeMap;
+    let h = home();
+    let xdg = |var: &str, fallback: &str| {
+        std::env::var_os(var)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| h.join(fallback))
+    };
+    let roots = [
+        (xdg("XDG_CONFIG_HOME", ".config"), "settings"),
+        (xdg("XDG_CACHE_HOME", ".cache"), "caches"),
+        (xdg("XDG_DATA_HOME", ".local/share"), "plugins & data"),
+    ];
+    // (vendor folder, product) -> version -> folders
+    let mut map: BTreeMap<(&str, String), BTreeMap<String, Vec<PathBuf>>> = BTreeMap::new();
+    for vendor in ["JetBrains", "Google"] {
+        for (root, _) in &roots {
+            for (name, path) in subdirs(&root.join(vendor)) {
+                let Some((product, ver)) = split_ide_name(&name) else {
+                    continue;
+                };
+                if vendor == "Google" && product != "AndroidStudio" {
+                    continue;
+                }
+                map.entry((vendor, product.to_string()))
+                    .or_default()
+                    .entry(ver.to_string())
+                    .or_default()
+                    .push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for ((_, product), versions) in map {
+        let newest = versions.keys().max_by_key(|v| version_key(v)).cloned();
+        for (ver, dirs) in versions {
+            if Some(&ver) == newest.as_ref() {
+                continue;
+            }
+            let size = dirs.iter().map(|d| dir_usage(d)).sum();
+            out.push(Toolchain {
+                kind: "IDE (old version)",
+                name: format!("{product} {ver}"),
+                size,
+                current: false,
+                removal: Removal { dirs, cmds: vec![] },
+            });
+        }
+    }
+    out
+}
+
+fn android_sdk_root() -> Option<PathBuf> {
+    ["ANDROID_HOME", "ANDROID_SDK_ROOT"]
+        .iter()
+        .filter_map(|v| std::env::var_os(v).map(PathBuf::from))
+        .chain([home().join("Android/Sdk"), home().join(".android/sdk")])
+        .find(|p| p.is_dir())
+}
+
+/// The Android SDK's per-version packages (older platforms, build-tools, NDKs, system images)
+/// and emulator devices. The newest of each package kind is kept; system images in use by a
+/// virtual device are protected.
+fn android_sdk() -> Vec<Toolchain> {
+    let mut out = Vec::new();
+    let avd_home = std::env::var_os("ANDROID_AVD_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".android/avd"));
+
+    // Virtual devices, and the system images they need.
+    let mut used_images: Vec<String> = Vec::new();
+    let mut avds = Vec::new();
+    for e in std::fs::read_dir(&avd_home).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if let Some(avd) = name.strip_suffix(".avd") {
+            let dir = e.path();
+            if let Ok(cfg) = std::fs::read_to_string(dir.join("config.ini")) {
+                used_images.extend(
+                    cfg.lines()
+                        .filter_map(|l| l.strip_prefix("image.sysdir.1="))
+                        .map(|v| v.trim().trim_end_matches('/').to_string()),
+                );
+            }
+            avds.push((avd.to_string(), dir));
+        }
+    }
+    avds.sort();
+    for (name, dir) in avds {
+        let ini = avd_home.join(format!("{name}.ini"));
+        let cmds = if ini.exists() {
+            vec![vec![
+                "rm".to_string(),
+                "-f".into(),
+                ini.display().to_string(),
+            ]]
+        } else {
+            vec![]
+        };
+        out.push(Toolchain {
+            kind: "Android emulator",
+            name: format!("device {name}"),
+            size: dir_usage(&dir),
+            current: false,
+            removal: Removal {
+                dirs: vec![dir],
+                cmds,
+            },
+        });
+    }
+
+    let Some(sdk) = android_sdk_root() else {
+        return out;
+    };
+    // Newest version of each single-level package kind is kept.
+    for (sub, label) in [
+        ("platforms", "Android platform"),
+        ("build-tools", "Android build-tools"),
+        ("ndk", "Android NDK"),
+    ] {
+        let vers = subdirs(&sdk.join(sub));
+        let newest = vers.iter().map(|(n, _)| version_key(n)).max();
+        for (name, path) in vers {
+            out.push(Toolchain {
+                kind: label,
+                name: name.clone(),
+                size: dir_usage(&path),
+                current: Some(version_key(&name)) == newest,
+                removal: Removal::dir(path),
+            });
+        }
+    }
+    // system-images/<api>/<variant>/<abi>
+    for (api, apath) in subdirs(&sdk.join("system-images")) {
+        for (variant, vpath) in subdirs(&apath) {
+            for (abi, path) in subdirs(&vpath) {
+                let rel = format!("system-images/{api}/{variant}/{abi}");
+                let current = used_images.iter().any(|u| u == &rel);
+                out.push(Toolchain {
+                    kind: "Android system image",
+                    name: format!("{api} {variant} {abi}"),
+                    size: dir_usage(&path),
+                    current,
+                    removal: Removal::dir(path),
+                });
+            }
         }
     }
     out
@@ -452,6 +630,69 @@ mod tests {
             "{kinds:?}"
         );
         assert!(found.iter().all(|a| !a.path.starts_with(&other)));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn ide_names_split_into_product_and_version() {
+        assert_eq!(
+            split_ide_name("IntelliJIdea2026.2"),
+            Some(("IntelliJIdea", "2026.2"))
+        );
+        assert_eq!(
+            split_ide_name("AndroidStudio2024.1.1"),
+            Some(("AndroidStudio", "2024.1.1"))
+        );
+        assert_eq!(split_ide_name("Toolbox"), None);
+        assert_eq!(split_ide_name("Idea"), None);
+        assert_eq!(split_ide_name("2026.1"), None);
+    }
+
+    #[test]
+    fn android_sdk_keeps_newest_and_images_used_by_devices() {
+        let base = std::env::temp_dir().join(format!("android-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let sdk = base.join("Sdk");
+        for d in [
+            "platforms/android-33",
+            "platforms/android-34",
+            "build-tools/33.0.2",
+            "build-tools/34.0.0",
+            "system-images/android-34/google_apis/x86_64",
+            "system-images/android-30/google_apis/x86_64",
+        ] {
+            std::fs::create_dir_all(sdk.join(d)).unwrap();
+            std::fs::write(sdk.join(d).join("f"), "x").unwrap();
+        }
+        let avd = base.join("avd");
+        std::fs::create_dir_all(avd.join("Pixel.avd")).unwrap();
+        std::fs::write(
+            avd.join("Pixel.avd/config.ini"),
+            "image.sysdir.1=system-images/android-34/google_apis/x86_64/\n",
+        )
+        .unwrap();
+        std::fs::write(avd.join("Pixel.ini"), "path=x").unwrap();
+        // SAFETY: tests in this module don't read these variables concurrently.
+        unsafe {
+            std::env::set_var("ANDROID_HOME", &sdk);
+            std::env::set_var("ANDROID_AVD_HOME", &avd);
+        }
+        let t = android_sdk();
+        let find = |n: &str| {
+            t.iter()
+                .find(|x| x.name.contains(n))
+                .unwrap_or_else(|| panic!("{n} missing in {t:?}"))
+        };
+        assert!(find("android-34").current && !find("android-33").current);
+        assert!(find("34.0.0").current && !find("33.0.2").current);
+        assert!(
+            find("android-34 google_apis").current,
+            "image used by an AVD is protected"
+        );
+        assert!(!find("android-30").current);
+        let dev = find("device Pixel");
+        assert_eq!(dev.removal.dirs.len(), 1);
+        assert_eq!(dev.removal.cmds.len(), 1, "the .ini file is removed too");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

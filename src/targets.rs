@@ -83,6 +83,7 @@ pub fn scan_all(pm: Option<Pm>, pkg_sizes: &HashMap<String, u64>) -> Vec<Target>
         Box::new(conda_pkgs),
         Box::new(nuget_cache),
         Box::new(bundler_cache),
+        Box::new(android_cache),
         Box::new(|| container_cache("docker")),
         Box::new(|| container_cache("podman")),
     ];
@@ -461,6 +462,17 @@ fn bundler_cache() -> Option<Target> {
         "Bundler cache",
         "Cached .gem files in ~/.bundle/cache. Re-downloaded on the next `bundle install`.",
         vec![home().join(".bundle/cache")],
+    )
+}
+
+fn android_cache() -> Option<Target> {
+    simple_dev_cache(
+        "Android build cache",
+        "Android tooling caches in ~/.android (cache, build-cache). Rebuilt on demand; virtual devices are not touched.",
+        vec![
+            home().join(".android/cache"),
+            home().join(".android/build-cache"),
+        ],
     )
 }
 
