@@ -45,6 +45,7 @@ enum Msg {
     DevDone,
     Ports(Result<Vec<crate::ports::Listener>, String>),
     Procs(Box<crate::procscan::ScanResult>),
+    Clam(Box<crate::clam::Outcome>),
     Security(Vec<crate::secscan::Finding>, usize),
     Perf(Box<perf::Snapshot>),
     Java(Box<java::JavaReport>),
@@ -212,6 +213,9 @@ pub struct App {
     procs_scanning: bool,
     procs_scanned: bool,
     procs_elevated: bool,
+    clam_scanning: bool,
+    clam_result: Option<crate::clam::Outcome>,
+    clam_dir: String,
     procs_inspected: usize,
     procs_opaque: usize,
     sec_scanned: usize,
@@ -307,6 +311,9 @@ impl App {
             procs_scanning: false,
             procs_scanned: false,
             procs_elevated: false,
+            clam_scanning: false,
+            clam_result: None,
+            clam_dir: util::home().display().to_string(),
             procs_inspected: 0,
             procs_opaque: 0,
             sec_scanned: 0,
@@ -505,6 +512,10 @@ impl App {
                     }
                 }
                 Msg::Procs(r) => self.apply_procs(*r),
+                Msg::Clam(o) => {
+                    self.clam_scanning = false;
+                    self.clam_result = Some(*o);
+                }
                 Msg::Perf(p) => {
                     self.perf_loading = false;
                     let alive: HashSet<&String> = p.kernels.iter().map(|k| &k.version).collect();

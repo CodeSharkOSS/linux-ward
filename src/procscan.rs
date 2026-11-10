@@ -423,6 +423,19 @@ fn gather(pid: u32, my_uid: u32) -> Option<ProcInfo> {
     })
 }
 
+/// Every distinct program file that a running process was started from.
+pub fn running_executables() -> Vec<String> {
+    let mut v: Vec<String> = numeric_pids()
+        .into_iter()
+        .filter_map(|p| std::fs::read_link(format!("/proc/{p}/exe")).ok())
+        .map(|p| p.to_string_lossy().to_string())
+        .filter(|p| p.starts_with('/') && !p.ends_with(" (deleted)") && Path::new(p).is_file())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ScanResult {
     pub suspects: Vec<Suspect>,

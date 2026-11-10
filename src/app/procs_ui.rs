@@ -1,7 +1,13 @@
 //! The Processes tab: running programs ranked by how unusual they look.
 
 use super::*;
+use crate::clam;
 use crate::procscan::{self, Level, ScanResult, Suspect};
+
+enum ClamJob {
+    Folder(String),
+    Files(Vec<String>, String),
+}
 use crate::targets::Action;
 
 impl App {
@@ -49,39 +55,100 @@ impl App {
         self.procs_scanned = true;
     }
 
-    /// Check one executable with ClamAV, if it is installed.
-    fn clam_scan(&mut self, path: String) {
-        let (tool, args): (&str, Vec<String>) = if util::which("clamdscan") {
-            (
-                "clamdscan",
-                vec!["--fdpass".into(), "--no-summary".into(), path.clone()],
-            )
-        } else if util::which("clamscan") {
-            ("clamscan", vec!["--no-summary".into(), path.clone()])
-        } else {
-            self.log
-                .push("✘ ClamAV isn't installed (clamscan / clamdscan not found)".into());
-            return;
-        };
-        self.busy = Some("Scanning with ClamAV…".into());
+    /// Run a ClamAV scan in the background; the result lands in the panel on this tab.
+    fn start_clam(&mut self, job: ClamJob) {
+        self.clam_scanning = true;
+        self.clam_result = None;
         let n = self.notifier();
         std::thread::spawn(move || {
-            let a: Vec<&str> = args.iter().map(String::as_str).collect();
-            let out = util::run(tool, &a);
-            let verdict = out.combined();
-            n.send(Msg::Log(if out.ok {
-                format!("✔ ClamAV: {}", verdict.lines().next().unwrap_or("OK"))
-            } else {
-                format!(
-                    "✘ ClamAV: {}",
-                    verdict
-                        .lines()
-                        .next()
-                        .unwrap_or("scan failed or found something")
-                )
+            let out = match job {
+                ClamJob::Folder(dir) => clam::scan_folder(&dir),
+                ClamJob::Files(paths, label) => clam::scan_files(&paths, &label),
+            };
+            n.send(Msg::Log(match (&out.error, out.infected.len()) {
+                (Some(e), _) => format!("✘ ClamAV: {e}"),
+                (None, 0) => format!("✔ ClamAV found no threats in {}", out.target),
+                (None, k) => format!("!! ClamAV found {k} infected file(s) in {}", out.target),
             }));
-            n.send(Msg::Done { refresh: false });
+            n.send(Msg::Clam(Box::new(out)));
         });
+    }
+
+    /// The always-visible malware scanner panel: scan what is running, or any folder.
+    fn clam_panel(&mut self, ui: &mut egui::Ui) {
+        let mut job: Option<ClamJob> = None;
+        let mut trash: Option<Vec<PathBuf>> = None;
+        egui::CollapsingHeader::new(RichText::new("🛡 Malware scan (ClamAV)").strong()).default_open(true).show(ui, |ui| {
+            let installed = util::which("clamscan") || util::which("clamdscan");
+            if !installed {
+                ui.colored_label(Color32::from_rgb(230, 170, 60), "ClamAV isn't installed, so files can't be scanned for known malware yet.");
+                ui.label(RichText::new(format!("Install it with: {}", clam::install_hint(self.pm))).monospace().size(12.0));
+                return;
+            }
+            ui.label(RichText::new("ClamAV recognises known viruses and malware by signature. This complements the behaviour checks below: it can't spot brand-new threats, but it will catch common ones.").weak().size(12.0));
+            ui.horizontal(|ui| {
+                let idle = !self.clam_scanning && self.busy.is_none();
+                if ui.add_enabled(idle, egui::Button::new("Scan running programs")).on_hover_text("Scans the program file behind every process that is running now").clicked() {
+                    let exes = procscan::running_executables();
+                    let label = format!("{} running programs", exes.len());
+                    job = Some(ClamJob::Files(exes, label));
+                }
+                ui.separator();
+                ui.label("Folder");
+                ui.add(egui::TextEdit::singleline(&mut self.clam_dir).desired_width(260.0));
+                if ui.add_enabled(idle && !self.clam_dir.trim().is_empty(), egui::Button::new("Scan folder")).clicked() {
+                    job = Some(ClamJob::Folder(self.clam_dir.trim().to_string()));
+                }
+                if self.clam_scanning {
+                    ui.spinner();
+                    ui.label(RichText::new("scanning… ClamAV loads its signatures first (~15 s), and a large folder can take several minutes").weak());
+                }
+            });
+            if let Some(r) = &self.clam_result {
+                ui.add_space(4.0);
+                if let Some(e) = &r.error {
+                    ui.colored_label(Color32::from_rgb(220, 90, 80), format!("✘ Scan of {} failed: {e}", r.target));
+                } else if r.infected.is_empty() {
+                    ui.label(RichText::new(format!("✔ No threats found in {}", r.target)).color(Color32::from_rgb(90, 190, 110)).strong());
+                } else {
+                    ui.colored_label(Color32::from_rgb(230, 90, 80), format!("⚠ {} threat(s) found in {}", r.infected.len(), r.target));
+                    for (path, sig) in &r.infected {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(sig).color(Color32::from_rgb(230, 90, 80)).strong());
+                            ui.label(RichText::new(path).monospace().size(12.0));
+                            if ui.small_button("Open").clicked()
+                                && let Some(parent) = std::path::Path::new(path).parent()
+                            {
+                                util::open(parent);
+                            }
+                            if ui.small_button("Move to Trash…").clicked() {
+                                trash = Some(vec![PathBuf::from(path)]);
+                            }
+                        });
+                    }
+                }
+                let how = match r.tool {
+                    Some(clam::Tool::Daemon) => "via clamd",
+                    Some(clam::Tool::Standalone) => "via clamscan",
+                    None => "",
+                };
+                let line = r.summary.join(" · ");
+                if !line.is_empty() || !how.is_empty() {
+                    ui.label(RichText::new(format!("{line}  {how}")).weak().size(12.0));
+                }
+            }
+        });
+        if let Some(j) = job {
+            self.start_clam(j);
+        }
+        if let Some(paths) = trash {
+            self.confirm = Some(Confirm::Files {
+                size: 0,
+                paths,
+                permanent: false,
+            });
+        }
+        ui.separator();
     }
 
     pub(super) fn processes_tab(&mut self, ui: &mut egui::Ui) {
@@ -91,9 +158,10 @@ impl App {
         let mut rescan = false;
         let mut elevate = false;
         let mut stop: Option<Suspect> = None;
-        let mut clam: Option<String> = None;
+        let mut clam_one: Option<String> = None;
 
         ui.add_space(6.0);
+        self.clam_panel(ui);
         ui.horizontal(|ui| {
             if self.procs_scanning {
                 ui.spinner();
@@ -134,7 +202,7 @@ impl App {
                     .color(Color32::from_rgb(90, 190, 110))
                     .strong(),
             );
-            ui.label(RichText::new("This doesn't prove the system is clean: rootkits and well-made malware can hide from these checks. Pair it with a scanner such as ClamAV.").weak());
+            ui.label(RichText::new("This doesn't prove the system is clean: rootkits and well-made malware can hide from these checks. Use the malware scan above as a second opinion.").weak());
         }
 
         egui::ScrollArea::vertical()
@@ -199,7 +267,7 @@ impl App {
                                         .on_hover_text("Needs ClamAV (clamscan / clamdscan)")
                                         .clicked()
                                 {
-                                    clam = Some(file.to_string());
+                                    clam_one = Some(file.to_string());
                                 }
                                 if ui.small_button("Copy details").clicked() {
                                     ui.ctx().copy_text(format!(
@@ -231,8 +299,9 @@ impl App {
             // Scanning again keeps the access level of the last scan.
             self.start_proc_scan(self.procs_elevated);
         }
-        if let Some(p) = clam {
-            self.clam_scan(p);
+        if let Some(p) = clam_one {
+            let label = format!("file {p}");
+            self.start_clam(ClamJob::Files(vec![p], label));
         }
         if let Some(s) = stop
             && let Some(pid) = s.pid

@@ -1,6 +1,7 @@
 use eframe::egui;
 
 mod app;
+mod clam;
 mod devclean;
 mod dupes;
 mod java;
