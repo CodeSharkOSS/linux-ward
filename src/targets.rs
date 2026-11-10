@@ -574,6 +574,10 @@ fn container_cache(tool: &str) -> Option<Target> {
     if has_access {
         for line in df.stdout.lines() {
             if let Some((kind, rec)) = line.split_once('\t') {
+                // `system prune` never touches volumes, so their "reclaimable" space isn't ours to promise.
+                if kind.to_lowercase().contains("volume") {
+                    continue;
+                }
                 size += parse_reclaimable(rec);
                 details.push(format!("{kind}: {} reclaimable", rec.trim()));
             }
@@ -702,6 +706,9 @@ pub fn execute(targets: &[Target], log: &mut dyn FnMut(String)) {
                         format!("✘ {} failed", t.name)
                     });
                 }
+            }
+            Action::Root(cmds) if cmds.is_empty() => {
+                log(format!("– {}: nothing to do", t.name));
             }
             Action::Root(cmds) => root_cmds.extend(cmds.iter().cloned()),
         }

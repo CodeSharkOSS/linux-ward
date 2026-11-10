@@ -52,8 +52,22 @@ pub fn clear_dir_contents(dir: &Path) -> (u64, Vec<String>) {
     };
     for entry in entries.flatten() {
         let p = entry.path();
+        // Honour the user's exclude list: never delete a listed folder, or one that contains one.
+        if excluded(&p) || contains_excluded(&p) {
+            errors.push(format!("{}: kept (in your exclude list)", p.display()));
+            continue;
+        }
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let res = if is_dir {
+            // `dir_usage` stays on one filesystem; deleting must too, or a bind/FUSE mount
+            // inside the folder would lose the files on the mounted volume.
+            if has_other_filesystem(&p) {
+                errors.push(format!(
+                    "{}: skipped (another disk is mounted inside)",
+                    p.display()
+                ));
+                continue;
+            }
             std::fs::remove_dir_all(&p)
         } else {
             std::fs::remove_file(&p)
@@ -66,6 +80,20 @@ pub fn clear_dir_contents(dir: &Path) -> (u64, Vec<String>) {
     (before.saturating_sub(after), errors)
 }
 
+/// True if anything below `dir` lives on a different filesystem (a mount point).
+pub fn has_other_filesystem(dir: &Path) -> bool {
+    let Ok(root) = std::fs::symlink_metadata(dir) else {
+        return false;
+    };
+    let dev = root.dev();
+    walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_dir())
+        .any(|e| e.metadata().is_ok_and(|m| m.dev() != dev))
+}
+
 /// Delete a directory tree after sanity checks: it must be a real directory (not a symlink),
 /// deep enough that it can't be `/`, a home directory or a top-level system folder.
 pub fn remove_dir_checked(dir: &Path) -> Result<u64, String> {
@@ -75,6 +103,12 @@ pub fn remove_dir_checked(dir: &Path) -> Result<u64, String> {
     }
     if !dir.is_absolute() || dir.components().count() < 4 || dir == home() {
         return Err("refusing to delete a top-level folder".into());
+    }
+    if excluded(dir) || contains_excluded(dir) {
+        return Err("it is, or contains, a folder in your exclude list".into());
+    }
+    if has_other_filesystem(dir) {
+        return Err("another disk is mounted inside it".into());
     }
     let size = dir_usage(dir);
     std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
@@ -88,10 +122,9 @@ fn config_dir() -> PathBuf {
         .join("diskclean")
 }
 
-/// Paths listed (one per line, `#` comments) in `~/.config/diskclean/exclude`. Every scan skips them.
-pub fn excluded(path: &Path) -> bool {
+fn exclude_list() -> &'static [PathBuf] {
     static LIST: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
-    let list = LIST.get_or_init(|| {
+    LIST.get_or_init(|| {
         std::fs::read_to_string(config_dir().join("exclude"))
             .unwrap_or_default()
             .lines()
@@ -102,8 +135,18 @@ pub fn excluded(path: &Path) -> bool {
                 None => PathBuf::from(l),
             })
             .collect()
-    });
-    list.iter().any(|p| path.starts_with(p))
+    })
+}
+
+/// Paths listed (one per line, `#` comments) in `~/.config/diskclean/exclude`. Every scan skips
+/// them and nothing inside them is deleted.
+pub fn excluded(path: &Path) -> bool {
+    exclude_list().iter().any(|p| path.starts_with(p))
+}
+
+/// True if a listed folder lives *inside* `path`, so deleting `path` would delete it.
+pub fn contains_excluded(path: &Path) -> bool {
+    exclude_list().iter().any(|p| p.starts_with(path))
 }
 
 /// Append a line to `~/.local/state/diskclean/actions.log` (best effort). The file is opened once.
@@ -288,10 +331,23 @@ pub fn run_timeout(cmd: &str, args: &[&str], secs: u64) -> CmdOut {
             };
         }
     };
+    // Drain both pipes while waiting: a child that writes more than a pipe buffer (~64 KiB)
+    // would otherwise block forever and be reported as a timeout.
+    fn drain<R: std::io::Read + Send + 'static>(r: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut r) = r {
+                let _ = r.read_to_end(&mut buf);
+            }
+            buf
+        })
+    }
+    let out_reader = drain(child.stdout.take());
+    let err_reader = drain(child.stderr.take());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(st)) => break st,
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(40))
             }
@@ -306,20 +362,14 @@ pub fn run_timeout(cmd: &str, args: &[&str], secs: u64) -> CmdOut {
                 };
             }
         }
-    }
-    match child.wait_with_output() {
-        Ok(o) => CmdOut {
-            ok: o.status.success(),
-            code: o.status.code(),
-            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
-        },
-        Err(e) => CmdOut {
-            ok: false,
-            code: None,
-            stdout: String::new(),
-            stderr: e.to_string(),
-        },
+    };
+    let stdout = out_reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
+    CmdOut {
+        ok: status.success(),
+        code: status.code(),
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
     }
 }
 

@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::perf::{Rec, natural_cmp, parse_stat};
 use crate::pkg::Pm;
 use crate::targets::Action;
-use crate::util::{self, human, run, run_timeout, sh_quote, which};
+use crate::util::{self, human, run, run_timeout, which};
 
 pub const LATEST_LTS: u32 = 25;
 const LTS: [u32; 5] = [8, 11, 17, 21, 25];
@@ -118,7 +118,7 @@ pub fn parse_xmx(arg: &str) -> Option<u64> {
         'g' | 'G' => (&v[..v.len() - 1], GIB),
         _ => (v, 1),
     };
-    num.parse::<u64>().ok().map(|n| n * mul)
+    num.parse::<u64>().ok().and_then(|n| n.checked_mul(mul))
 }
 
 fn flag_value(flags: &str, name: &str) -> Option<u64> {
@@ -216,7 +216,10 @@ fn find_ide(exe: &Path) -> Option<Ide> {
         .ok()?
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|d| d.starts_with(prefix))
+        .filter(|d| {
+            d.strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        })
         .collect();
     dirs.sort_by(|a, b| natural_cmp(a, b));
     let vmoptions = root.join(dirs.last()?).join(format!("{name}64.vmoptions"));
@@ -237,14 +240,44 @@ pub fn with_xmx(text: &str, mb: u64) -> String {
     lines.join("\n") + "\n"
 }
 
-/// Shell command (as argv) that writes `content` to `path`, keeping a `.diskclean.bak` of the old file.
+/// The file's text, "" when it doesn't exist yet, or None when it exists but can't be read as text
+/// (so callers never rewrite a file they failed to read).
+fn read_existing(path: &Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(t) => Some(t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+        Err(_) => None,
+    }
+}
+
+/// Whether a Java `.properties` text already sets `key` (`key=v`, `key = v` or `key: v`).
+fn has_property(text: &str, key: &str) -> bool {
+    text.lines().map(str::trim_start).any(|l| {
+        !l.starts_with(['#', '!'])
+            && l.strip_prefix(key)
+                .is_some_and(|rest| rest.trim_start().starts_with(['=', ':']))
+    })
+}
+
+/// Shell command (as argv) that writes `content` to `path` safely: symlinks are followed so the real
+/// file is edited, the very first version is kept once as `.diskclean.bak` (a later edit never
+/// overwrites that original), the write is aborted if the backup fails, and the new text replaces the
+/// file atomically with the old file's permissions.
 pub fn write_file_cmd(path: &Path, content: &str) -> Vec<String> {
-    let p = sh_quote(&path.to_string_lossy());
-    let script = format!(
-        "mkdir -p \"$(dirname {p})\" && {{ [ -f {p} ] && cp -a {p} {p}.diskclean.bak; true; }} && printf '%s' {c} > {p}",
-        c = sh_quote(content)
-    );
-    vec!["sh".into(), "-c".into(), script]
+    let script = r#"p=$(readlink -f -- "$1" 2>/dev/null || printf '%s' "$1")
+mkdir -p -- "$(dirname -- "$p")" || exit 1
+if [ -e "$p" ] && [ ! -e "$p.diskclean.bak" ]; then cp -p -- "$p" "$p.diskclean.bak" || { echo "could not back up $p; nothing changed" >&2; exit 1; }; fi
+printf '%s' "$2" > "$p.diskclean.new" || exit 1
+if [ -e "$p" ]; then chmod --reference="$p" -- "$p.diskclean.new" 2>/dev/null; fi
+mv -f -- "$p.diskclean.new" "$p""#;
+    vec![
+        "sh".into(),
+        "-c".into(),
+        script.into(),
+        "sh".into(),
+        path.to_string_lossy().into_owned(),
+        content.to_string(),
+    ]
 }
 
 // ----- installed runtimes ---------------------------------------------------------------
@@ -444,7 +477,8 @@ fn find_jvm_processes() -> Vec<Found> {
             });
             let home = lib
                 .as_deref()
-                .and_then(|p| p.find("/lib/").map(|i| PathBuf::from(&p[..i])));
+                // libjvm lives in <home>/lib[/<arch>]/server; /usr/lib/jvm/... paths hold an earlier "/lib/".
+                .and_then(|p| p.rfind("/lib/").map(|i| PathBuf::from(&p[..i])));
             let is_jvm = lib.is_some() || (maps.is_none() && comm == "java");
             is_jvm.then_some(Found {
                 pid,
@@ -727,7 +761,11 @@ fn build_recs(pm: Option<Pm>, jvms: &[Jvm], procs: &[JProc], ram: u64) -> (Vec<R
 
     if let Some(pm) = pm {
         // 1. Missing class-data-sharing archive: every start-up pays for loading classes from scratch.
-        for j in installed.iter().filter(|j| j.cds_missing) {
+        // Only system runtimes: running a binary from ~/.jdks or ~/.sdkman as root would leave root-owned files there.
+        for j in installed
+            .iter()
+            .filter(|j| j.cds_missing && !j.home.starts_with(util::home()))
+        {
             let java = j.home.join("bin/java").to_string_lossy().into_owned();
             recs.push(Rec {
                 tag: "Java",
@@ -772,6 +810,10 @@ fn build_recs(pm: Option<Pm>, jvms: &[Jvm], procs: &[JProc], ram: u64) -> (Vec<R
             .filter(|j| {
                 !j.is_default
                     && !j.running
+                    && !installed.iter().any(|o| {
+                        (o.is_default || o.running)
+                            && (o.home.starts_with(&j.home) || j.home.starts_with(&o.home))
+                    })
                     && !j.packages.is_empty()
                     && (j.major < 17 && newest_lts >= 17)
             })
@@ -815,8 +857,8 @@ fn build_recs(pm: Option<Pm>, jvms: &[Jvm], procs: &[JProc], ram: u64) -> (Vec<R
         recs.push(Rec {
             tag: "Java",
             title: format!("Stop {} idle build daemon(s)", idle.len()),
-            detail: format!("{} are using {} of RAM but doing nothing. They start again automatically on the next build.", idle.iter().map(|p| p.label.as_str()).collect::<Vec<_>>().join(", "), human(mem)),
-            safe: true,
+            detail: format!("{} are using {} of RAM and looked idle in a brief sample. They start again automatically on the next build, but stopping one that is mid-build would abort that build.", idle.iter().map(|p| p.label.as_str()).collect::<Vec<_>>().join(", "), human(mem)),
+            safe: false,
             actions: vec![Action::User(vec![cmd])],
         });
     }
@@ -829,7 +871,9 @@ fn build_recs(pm: Option<Pm>, jvms: &[Jvm], procs: &[JProc], ram: u64) -> (Vec<R
         if used * 100 / max.max(1) >= 75 {
             let cur_mb = max / MIB;
             let target = round_to((cur_mb * 2).min(ram / MIB / 4).max(cur_mb + 512), 256);
-            let text = std::fs::read_to_string(&ide.vmoptions).unwrap_or_default();
+            let Some(text) = read_existing(&ide.vmoptions) else {
+                continue;
+            };
             recs.push(Rec {
                 tag: "Java",
                 title: format!("Raise {} heap from {cur_mb} MB to {target} MB", p.label),
@@ -842,20 +886,18 @@ fn build_recs(pm: Option<Pm>, jvms: &[Jvm], procs: &[JProc], ram: u64) -> (Vec<R
 
     // 6. Gradle defaults.
     let gradle = util::home().join(".gradle");
-    if gradle.is_dir() {
-        let props = gradle.join("gradle.properties");
-        let text = std::fs::read_to_string(&props).unwrap_or_default();
+    let props = gradle.join("gradle.properties");
+    // A file that exists but can't be read as text is left alone rather than treated as empty.
+    if gradle.is_dir()
+        && let Some(text) = read_existing(&props)
+    {
         let missing: Vec<String> = [
             ("org.gradle.daemon.idletimeout", "600000"),
             ("org.gradle.parallel", "true"),
             ("org.gradle.caching", "true"),
         ]
         .iter()
-        .filter(|(k, _)| {
-            !text
-                .lines()
-                .any(|l| l.trim_start().starts_with(&format!("{k}=")))
-        })
+        .filter(|(k, _)| !has_property(&text, k))
         .map(|(k, v)| format!("{k}={v}"))
         .collect();
         if !missing.is_empty() {

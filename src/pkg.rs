@@ -60,6 +60,10 @@ const PROTECTED: &[&str] = &[
     "linux",
     "kernel",
     "kernel-core",
+    "kernel-default",
+    "linux-lts",
+    "linux-zen",
+    "linux-hardened",
     "openssl",
     "login",
     "passwd",
@@ -190,12 +194,66 @@ pub fn category(name: &str) -> Category {
     }
 }
 
+/// Packages that own the running kernel's image or modules, by asking the package manager.
+/// Names alone are not enough: rpm calls it `kernel-core`, openSUSE `kernel-default`, Arch
+/// `linux-zen`, and only dpkg-style names happen to contain the release string.
+fn running_kernel_packages() -> &'static HashSet<String> {
+    static OWNERS: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+    OWNERS.get_or_init(|| {
+        let rel = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+        let rel = rel.trim();
+        let mut owners = HashSet::new();
+        if rel.is_empty() {
+            return owners;
+        }
+        let files = [
+            format!("/boot/vmlinuz-{rel}"),
+            format!("/usr/lib/modules/{rel}/vmlinuz"),
+            format!("/lib/modules/{rel}/vmlinuz"),
+            format!("/lib/modules/{rel}/modules.dep"),
+        ];
+        for f in files
+            .iter()
+            .filter(|f| std::path::Path::new(f.as_str()).exists())
+        {
+            let names: Vec<String> = if which("rpm") {
+                run("rpm", &["-qf", "--qf", "%{NAME}\n", f])
+                    .stdout
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .collect()
+            } else if which("dpkg") {
+                run("dpkg", &["-S", f])
+                    .stdout
+                    .lines()
+                    .filter_map(|l| l.split_once(": "))
+                    .flat_map(|(p, _)| p.split(", ").map(str::to_string).collect::<Vec<_>>())
+                    .collect()
+            } else if which("pacman") {
+                run("pacman", &["-Qoq", f])
+                    .stdout
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            owners.extend(
+                names
+                    .into_iter()
+                    .filter(|n| !n.is_empty() && !n.contains(' ')),
+            );
+        }
+        owners
+    })
+}
+
 pub fn is_protected(name: &str) -> bool {
     let base = name.split(':').next().unwrap_or(name);
-    if PROTECTED.contains(&base) {
+    if PROTECTED.contains(&base) || running_kernel_packages().contains(base) {
         return true;
     }
-    // The package providing the running kernel.
+    // Name-based fallback for the running kernel when the owner lookup found nothing.
     let rel = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
     let rel = rel.trim();
     !rel.is_empty()
@@ -286,7 +344,9 @@ impl Pm {
             Pm::Zypper => run("zypper", &["--non-interactive", "packages", "--unneeded"]),
         };
         // `pacman -Qdtq` exits 1 when there are no orphans.
-        if !out.ok && !(self == Pm::Pacman && out.stdout.trim().is_empty()) {
+        if !out.ok
+            && !(self == Pm::Pacman && out.stdout.trim().is_empty() && out.stderr.trim().is_empty())
+        {
             return Err(out.combined());
         }
         let mut names: Vec<String> = match self {
@@ -332,7 +392,9 @@ impl Pm {
             Pm::Zypper => run("zypper", &["--non-interactive", "packages", "--orphaned"]),
         };
         // `pacman -Qmq` exits 1 when there are none.
-        if !out.ok && !(self == Pm::Pacman && out.stdout.trim().is_empty()) {
+        if !out.ok
+            && !(self == Pm::Pacman && out.stdout.trim().is_empty() && out.stderr.trim().is_empty())
+        {
             return Err(out.combined());
         }
         let mut names: Vec<String> = match self {
@@ -386,7 +448,9 @@ impl Pm {
             Pm::Zypper => run("zypper", &["--non-interactive", "--quiet", "list-updates"]),
         };
         // `pacman -Qu` exits 1 when there is nothing to upgrade.
-        if !out.ok && !(self == Pm::Pacman && out.stdout.trim().is_empty()) {
+        if !out.ok
+            && !(self == Pm::Pacman && out.stdout.trim().is_empty() && out.stderr.trim().is_empty())
+        {
             return Err(out.combined());
         }
         let mut v = parse_upgradable(self, &out.stdout);
@@ -404,6 +468,10 @@ impl Pm {
     pub fn upgrade_cmds(self, names: &[String]) -> Vec<Vec<String>> {
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let names: Vec<String> = names.iter().filter(|n| valid_name(n)).cloned().collect();
+        // pacman can only upgrade everything; for the others an empty list would mean "all packages".
+        if names.is_empty() && self != Pm::Pacman {
+            return Vec::new();
+        }
         let with = |mut base: Vec<String>| {
             base.extend(names.iter().cloned());
             base
@@ -430,19 +498,27 @@ impl Pm {
         }
     }
 
+    /// Remove exactly the orphans that were scanned and shown to the user, minus protected ones.
+    /// (A blanket `autoremove` would remove whatever is autoremovable *at run time*, which can be
+    /// more than was listed and, on apt, also purges configuration files.)
     pub fn orphan_remove_cmds(self, names: &[String]) -> Vec<Vec<String>> {
+        let chosen: Vec<String> = names
+            .iter()
+            .filter(|n| valid_name(n) && !is_protected(n))
+            .cloned()
+            .collect();
+        if chosen.is_empty() {
+            return Vec::new();
+        }
         let mut cmd: Vec<String> = match self {
-            Pm::Apt => {
-                return vec![vec![
-                    "env".into(),
-                    "DEBIAN_FRONTEND=noninteractive".into(),
-                    "apt-get".into(),
-                    "autoremove".into(),
-                    "--purge".into(),
-                    "-y".into(),
-                ]];
-            }
-            Pm::Dnf => return vec![vec![Self::dnf().into(), "autoremove".into(), "-y".into()]],
+            Pm::Apt => vec![
+                "env".into(),
+                "DEBIAN_FRONTEND=noninteractive".into(),
+                "apt-get".into(),
+                "remove".into(),
+                "-y".into(),
+            ],
+            Pm::Dnf => vec![Self::dnf().into(), "remove".into(), "-y".into()],
             Pm::Pacman => vec!["pacman".into(), "-Rns".into(), "--noconfirm".into()],
             Pm::Zypper => vec![
                 "zypper".into(),
@@ -451,12 +527,7 @@ impl Pm {
                 "--clean-deps".into(),
             ],
         };
-        cmd.extend(
-            names
-                .iter()
-                .filter(|n| valid_name(n) && !is_protected(n))
-                .cloned(),
-        );
+        cmd.extend(chosen);
         vec![cmd]
     }
 
@@ -542,7 +613,9 @@ impl Pm {
                     .filter_map(|l| l.split_whitespace().next())
                     .map(str::to_string)
                     .collect();
-                (out, Some(list))
+                // A failed simulation (lock, unmet dependency) says nothing about what would go.
+                let list = out.ok.then_some(list);
+                (out, list)
             }
             Pm::Pacman => {
                 let args = with(&["-Rns", "--print", "--print-format", "%n"]);
@@ -562,26 +635,68 @@ impl Pm {
             }
             Pm::Dnf => {
                 let args = with(&["remove", "--assumeno"]);
-                (
-                    run(
-                        Self::dnf(),
-                        &args.iter().map(String::as_str).collect::<Vec<_>>(),
-                    ),
-                    None,
-                )
+                let out = run(
+                    Self::dnf(),
+                    &args.iter().map(String::as_str).collect::<Vec<_>>(),
+                );
+                // dnf exits non-zero for --assumeno, so judge by whether it printed a plan.
+                let list = parse_dnf_removals(&out.stdout);
+                (out, (!list.is_empty()).then_some(list))
             }
             Pm::Zypper => {
                 let args = with(&["--non-interactive", "rm", "--dry-run"]);
-                (
-                    run(
-                        "zypper",
-                        &args.iter().map(String::as_str).collect::<Vec<_>>(),
-                    ),
-                    None,
-                )
+                let out = run(
+                    "zypper",
+                    &args.iter().map(String::as_str).collect::<Vec<_>>(),
+                );
+                let list = parse_zypper_removals(&out.stdout);
+                let known = out.ok && !list.is_empty();
+                (out, known.then_some(list))
             }
         }
     }
+}
+
+/// Package names from `dnf remove --assumeno`: the indented rows under the "Removing…" headings.
+fn parse_dnf_removals(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_plan = false;
+    for l in text.lines() {
+        if l.starts_with("Removing") && l.trim_end().ends_with(':') {
+            in_plan = true;
+        } else if l.starts_with("Transaction Summary") {
+            break;
+        } else if in_plan && l.starts_with(' ') {
+            if let Some(n) = l.split_whitespace().next() {
+                names.push(n.to_string());
+            }
+        } else if !l.trim().is_empty() && !l.starts_with(' ') {
+            in_plan = false;
+        }
+    }
+    names
+}
+
+/// Package names from `zypper rm --dry-run`: the block after "…going to be REMOVED:".
+fn parse_zypper_removals(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_block = false;
+    for l in text.lines() {
+        if l.contains("going to be REMOVED") {
+            in_block = true;
+        } else if in_block {
+            if l.trim().is_empty() {
+                in_block = false;
+            } else {
+                names.extend(
+                    l.split_whitespace()
+                        .filter(|t| !t.starts_with('('))
+                        .map(str::to_string),
+                );
+            }
+        }
+    }
+    names
 }
 
 fn parse_upgradable(pm: Pm, text: &str) -> Vec<(String, String)> {
@@ -721,7 +836,12 @@ fn list_pacman() -> Result<Vec<Package>, String> {
     if !out.ok {
         return Err(out.combined());
     }
-    let explicit: HashSet<String> = run("pacman", &["-Qeq"])
+    let explicit_out = run("pacman", &["-Qeq"]);
+    // Without the explicit list every package would look like an automatic dependency.
+    if !explicit_out.ok && !explicit_out.stderr.trim().is_empty() {
+        return Err(explicit_out.combined());
+    }
+    let explicit: HashSet<String> = explicit_out
         .stdout
         .lines()
         .map(|l| l.trim().to_string())
@@ -961,7 +1081,11 @@ impl Pm {
             Pm::Apt => {
                 let out = run(
                     "dpkg-query",
-                    &["-W", "-f", "${Package}\t${Provides}\t${Conflicts}\n"],
+                    &[
+                        "-W",
+                        "-f",
+                        "${db:Status-Abbrev}\t${Package}\t${Provides}\t${Conflicts}\n",
+                    ],
                 );
                 if !out.ok {
                     return Err(out.combined());
@@ -974,10 +1098,14 @@ impl Pm {
                 };
                 for l in out.stdout.lines() {
                     let mut f = l.split('\t');
-                    let (Some(name), Some(prov), Some(conf)) = (f.next(), f.next(), f.next())
+                    let (Some(state), Some(name), Some(prov), Some(conf)) =
+                        (f.next(), f.next(), f.next(), f.next())
                     else {
                         continue;
                     };
+                    if !state.starts_with('i') {
+                        continue; // removed (rc) or never installed (un)
+                    }
                     recs.push(ConflictRec {
                         name: name.into(),
                         provides: split_caps(prov, ',')
@@ -1025,6 +1153,37 @@ impl Pm {
             }
         }
         Ok(match_conflicts(&recs))
+    }
+}
+
+#[cfg(test)]
+mod removal_preview_tests {
+    use super::*;
+
+    #[test]
+    fn dnf_plan_lists_dependents_too() {
+        let t = "Package Arch Version Repository Size\nRemoving:\n zip x86_64 0:3.0 fedora 694 KiB\nRemoving dependent packages:\n systemtap x86_64 0:5.6 fedora 0.0 B\nRemoving unused dependencies:\n tbb x86_64 0:1 fedora 4 KiB\n\nTransaction Summary:\n Removing: 3 packages\n";
+        assert_eq!(parse_dnf_removals(t), vec!["zip", "systemtap", "tbb"]);
+        assert!(parse_dnf_removals("Nothing to do.").is_empty());
+    }
+
+    #[test]
+    fn zypper_plan_lists_removed_block() {
+        let t = "Resolving...\nThe following 3 packages are going to be REMOVED:\n  a b\n  c\n\n3 packages to remove.\n";
+        assert_eq!(parse_zypper_removals(t), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn orphan_removal_uses_the_listed_names_and_skips_protected() {
+        assert!(Pm::Apt.orphan_remove_cmds(&[]).is_empty());
+        let cmds = Pm::Apt.orphan_remove_cmds(&["libfoo1".into(), "bash".into()]);
+        assert_eq!(cmds.len(), 1);
+        assert!(cmds[0].contains(&"libfoo1".to_string()) && !cmds[0].contains(&"bash".to_string()));
+        assert!(!cmds[0].contains(&"autoremove".to_string()));
+        assert!(
+            Pm::Dnf.upgrade_cmds(&[]).is_empty(),
+            "an empty list must not mean 'upgrade everything'"
+        );
     }
 }
 
