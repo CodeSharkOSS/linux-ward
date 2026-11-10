@@ -88,6 +88,8 @@ fn execute(tool: Tool, target: &str, input: &[&str]) -> Outcome {
     // 0 = clean, 1 = threats found, anything else = the scan itself failed.
     let error = match out.code {
         Some(0) | Some(1) => None,
+        // Unreadable files give exit code 2, but threats already found must still be shown.
+        _ if !infected.is_empty() => None,
         _ => {
             let lower = all.to_lowercase();
             Some(
@@ -98,7 +100,7 @@ fn execute(tool: Tool, target: &str, input: &[&str]) -> Outcome {
                 } else {
                     all.lines()
                         .map(str::trim)
-                        .find(|l| !l.is_empty())
+                        .find(|l| !l.is_empty() && !l.ends_with(" FOUND"))
                         .unwrap_or("the scan failed")
                         .to_string()
                 },

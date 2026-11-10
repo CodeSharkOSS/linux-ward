@@ -20,7 +20,12 @@ pub struct Listener {
 pub fn parse_ss(text: &str, my_uid: u32) -> Vec<Listener> {
     let mut v = Vec::new();
     for line in text.lines() {
-        let f: Vec<&str> = line.split_whitespace().collect();
+        // The users:(("name",pid=…)) field can hold spaces ("Plex Media Serv"): split it off first.
+        let (head, users) = match line.split_once("users:") {
+            Some((h, u)) => (h, u),
+            None => (line, ""),
+        };
+        let f: Vec<&str> = head.split_whitespace().collect();
         if f.len() < 5 || f[0] != "LISTEN" {
             continue;
         }
@@ -31,7 +36,6 @@ pub fn parse_ss(text: &str, my_uid: u32) -> Vec<Listener> {
             continue;
         };
         let addr = addr.trim_matches(['[', ']']).to_string();
-        let users = f.get(5).copied().unwrap_or("");
         let process = users
             .split("((\"")
             .nth(1)
@@ -78,9 +82,15 @@ mod tests {
     fn parses_ss_output() {
         let t = "LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:((\"sshd\",pid=812,fd=3))\n\
                  LISTEN 0 511 127.0.0.1:3000 0.0.0.0:* users:((\"node\",pid=4242,fd=19))\n\
-                 LISTEN 0 128 [::]:631 [::]:*\n";
+                 LISTEN 0 128 [::]:631 [::]:*\n\
+                 LISTEN 0 50 0.0.0.0:32400 0.0.0.0:* users:((\"Plex Media Serv\",pid=900,fd=8))\n";
         let v = parse_ss(t, u32::MAX);
-        assert_eq!(v.len(), 3);
+        assert_eq!(v.len(), 4);
+        let plex = v.iter().find(|l| l.port == 32400).unwrap();
+        assert_eq!(
+            (plex.process.as_str(), plex.pid),
+            ("Plex Media Serv", Some(900))
+        );
         let ssh = v.iter().find(|l| l.port == 22).unwrap();
         assert!(ssh.exposed && ssh.process == "sshd" && ssh.pid == Some(812));
         let node = v.iter().find(|l| l.port == 3000).unwrap();

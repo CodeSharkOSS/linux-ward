@@ -15,7 +15,7 @@ pub struct Artifact {
     pub kind: &'static str,
     pub path: PathBuf,
     pub size: u64,
-    /// Days since the folder was last modified.
+    /// Days since anything near the top of the folder was last modified.
     pub idle_days: u64,
 }
 
@@ -82,6 +82,28 @@ fn artifact_rules(dir: &Path) -> Vec<(&'static str, &'static str)> {
     v
 }
 
+/// Folder names that are sometimes generated and sometimes real source (`bin/deploy.sh`, `build/`
+/// scripts, vendored code): if git tracks anything inside, it is not disposable output.
+fn tracked_by_git(project: &Path, name: &str) -> bool {
+    if !matches!(name, "bin" | "obj" | "build" | "out" | "vendor" | "dist")
+        || !crate::util::which("git")
+    {
+        return false;
+    }
+    let out = run(
+        "git",
+        &[
+            "-C",
+            &project.to_string_lossy(),
+            "ls-files",
+            "-z",
+            "--",
+            name,
+        ],
+    );
+    out.ok && !out.stdout.is_empty()
+}
+
 fn walk(dir: &Path, depth: usize, found: &mut Vec<(PathBuf, &'static str, PathBuf)>) {
     if depth > 9 || crate::util::excluded(dir) {
         return;
@@ -103,6 +125,7 @@ fn walk(dir: &Path, depth: usize, found: &mut Vec<(PathBuf, &'static str, PathBu
         }
         if let Some((_, kind)) = rules.iter().find(|(n, _)| *n == name)
             && !crate::util::excluded(&path)
+            && !tracked_by_git(dir, &name)
         {
             found.push((dir.to_path_buf(), kind, path));
             continue; // don't descend into what we're about to delete
@@ -120,6 +143,31 @@ fn walk(dir: &Path, depth: usize, found: &mut Vec<(PathBuf, &'static str, PathBu
     }
 }
 
+/// Newest modification time in a folder, its children and grandchildren. A folder's own mtime only
+/// changes when direct entries are added or removed, so an actively rebuilt `target/` would look idle.
+fn last_activity(path: &Path) -> Option<SystemTime> {
+    let mtime = |p: &Path| std::fs::symlink_metadata(p).and_then(|m| m.modified()).ok();
+    let mut newest = mtime(path);
+    let mut seen = 0usize;
+    for child in std::fs::read_dir(path).into_iter().flatten().flatten() {
+        newest = newest.max(mtime(&child.path()));
+        if child.file_type().is_ok_and(|t| t.is_dir()) {
+            for grand in std::fs::read_dir(child.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                newest = newest.max(mtime(&grand.path()));
+                seen += 1;
+                if seen > 5000 {
+                    return newest;
+                }
+            }
+        }
+    }
+    newest
+}
+
 pub fn scan_artifacts(root: &Path) -> Vec<Artifact> {
     let mut found = Vec::new();
     walk(root, 0, &mut found);
@@ -135,9 +183,7 @@ pub fn scan_artifacts(root: &Path) -> Vec<Artifact> {
                             kind,
                             path: path.clone(),
                             size: dir_usage(path),
-                            idle_days: std::fs::metadata(path)
-                                .and_then(|m| m.modified())
-                                .ok()
+                            idle_days: last_activity(path)
                                 .and_then(|t| now.duration_since(t).ok())
                                 .map(|d| d.as_secs() / 86_400)
                                 .unwrap_or(0),
@@ -205,24 +251,59 @@ fn version_key(v: &str) -> Vec<u64> {
         .collect()
 }
 
+/// Resolve an nvm alias to one of the installed versions (without the leading `v`).
+/// Handles alias files (`alias/default` -> `lts/*` -> `lts/iron` -> `v20.1.0`), bare numbers and
+/// prefixes (`18` -> newest 18.x), and `node`/`stable` (newest). None when it can't be resolved.
+fn resolve_nvm_alias(nvm_root: &Path, alias: &str, installed: &[String]) -> Option<String> {
+    let mut cur = alias.trim().to_string();
+    for _ in 0..6 {
+        let value = std::fs::read_to_string(nvm_root.join("alias").join(&cur))
+            .ok()
+            .map(|v| v.trim().to_string());
+        let next = match value {
+            Some(v) if !v.is_empty() => v,
+            _ if matches!(cur.as_str(), "node" | "stable") => {
+                return installed.iter().max_by_key(|v| version_key(v)).cloned();
+            }
+            _ => cur.clone(),
+        };
+        let bare = next.trim_start_matches('v');
+        // Exact version, or a prefix such as "18" / "18.19": the newest matching install.
+        let mut matches: Vec<&String> = installed
+            .iter()
+            .filter(|v| v.as_str() == bare || v.starts_with(&format!("{bare}.")))
+            .collect();
+        matches.sort_by_key(|v| version_key(v));
+        if let Some(m) = matches.last() {
+            return Some((*m).clone());
+        }
+        if next == cur {
+            return None;
+        }
+        cur = next;
+    }
+    None
+}
+
 pub fn toolchains() -> Vec<Toolchain> {
     let h = home();
     let mut out = Vec::new();
 
-    // nvm: the default alias wins; otherwise the newest is kept.
-    let nvm = h.join(".nvm/versions/node");
-    let vers = subdirs(&nvm);
-    let alias = std::fs::read_to_string(h.join(".nvm/alias/default")).unwrap_or_default();
-    let alias = alias.trim().trim_start_matches('v');
-    let newest = vers.iter().map(|(n, _)| version_key(n)).max();
+    // nvm: follow the default alias (`18`, `lts/*`, `lts/iron`, `node`) to a version. If it can't
+    // be resolved, every version is treated as in use rather than guessing.
+    let nvm_root = h.join(".nvm");
+    let vers = subdirs(&nvm_root.join("versions/node"));
+    let names: Vec<String> = vers
+        .iter()
+        .map(|(n, _)| n.trim_start_matches('v').to_string())
+        .collect();
+    let wanted = resolve_nvm_alias(&nvm_root, "default", &names);
     for (name, path) in &vers {
-        let by_alias = !alias.is_empty() && name.trim_start_matches('v').starts_with(alias);
-        let current = by_alias
-            || (alias.is_empty()
-                || !vers
-                    .iter()
-                    .any(|(n, _)| n.trim_start_matches('v').starts_with(alias)))
-                && Some(version_key(name)) == newest;
+        let bare = name.trim_start_matches('v');
+        let current = match &wanted {
+            Some(w) => bare == w,
+            None => true,
+        };
         out.push(Toolchain {
             kind: "Node (nvm)",
             name: name.clone(),
@@ -237,6 +318,8 @@ pub fn toolchains() -> Vec<Toolchain> {
         let current = std::fs::read_link(cpath.join("current"))
             .ok()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
+        // Without a readable `current` link nothing can be proven unused, so nothing is offered.
+        let unknown = current.is_none();
         for (ver, vpath) in subdirs(&cpath) {
             if ver == "current"
                 || std::fs::symlink_metadata(&vpath).is_ok_and(|m| m.file_type().is_symlink())
@@ -247,7 +330,7 @@ pub fn toolchains() -> Vec<Toolchain> {
                 kind: "SDKMAN",
                 name: format!("{cand} {ver}"),
                 size: dir_usage(&vpath),
-                current: current.as_deref() == Some(ver.as_str()),
+                current: unknown || current.as_deref() == Some(ver.as_str()),
                 removal: Removal::dir(vpath),
             });
         }
@@ -256,7 +339,15 @@ pub fn toolchains() -> Vec<Toolchain> {
     // pyenv
     let global = std::fs::read_to_string(h.join(".pyenv/version")).unwrap_or_default();
     for (ver, vpath) in subdirs(&h.join(".pyenv/versions")) {
-        let current = global.lines().any(|l| l.trim() == ver);
+        // `version` may hold a prefix ("3.12") or several lines; virtualenvs in versions/<v>/envs and
+        // every environment whose python points at this interpreter depend on it too.
+        let selected = global
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .any(|l| l == ver || ver.starts_with(&format!("{l}.")));
+        let has_envs = std::fs::read_dir(vpath.join("envs")).is_ok_and(|mut d| d.next().is_some());
+        let current = selected || has_envs;
         out.push(Toolchain {
             kind: "Python (pyenv)",
             name: ver,
@@ -572,6 +663,10 @@ pub fn inspect_repo(path: &Path) -> Repo {
         .stdout
         .trim()
         .to_string();
+    let default_tip = git(path, &["rev-parse", &default_branch])
+        .stdout
+        .trim()
+        .to_string();
     let merged: Vec<String> = git(
         path,
         &[
@@ -590,6 +685,8 @@ pub fn inspect_repo(path: &Path) -> Repo {
             && *b != current
             && !matches!(*b, "main" | "master" | "develop" | "dev")
             && !b.contains(' ')
+            // Same commit as the default branch = just created, nothing merged yet.
+            && git(path, &["rev-parse", b]).stdout.trim() != default_tip
     })
     .map(str::to_string)
     .collect();
@@ -607,7 +704,6 @@ pub fn gc_cmd(repo: &Path) -> Vec<String> {
         "-C".into(),
         repo.display().to_string(),
         "gc".into(),
-        "--prune=now".into(),
     ]
 }
 
@@ -714,6 +810,42 @@ mod tests {
         let dev = find("device Pixel");
         assert_eq!(dev.removal.dirs.len(), 1);
         assert_eq!(dev.removal.cmds.len(), 1, "the .ini file is removed too");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn nvm_aliases_resolve_to_installed_versions() {
+        let base = std::env::temp_dir().join(format!("nvm-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("alias/lts")).unwrap();
+        std::fs::write(base.join("alias/default"), "lts/*\n").unwrap();
+        std::fs::write(base.join("alias/lts/*"), "lts/iron\n").unwrap();
+        std::fs::write(base.join("alias/lts/iron"), "v20.11.1\n").unwrap();
+        let installed: Vec<String> = ["20.11.1", "22.5.0", "23.1.0"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // The LTS default is 20.x, even though 23 is newer: 23 must not be the protected one.
+        assert_eq!(
+            resolve_nvm_alias(&base, "default", &installed).as_deref(),
+            Some("20.11.1")
+        );
+        std::fs::write(base.join("alias/default"), "22\n").unwrap();
+        assert_eq!(
+            resolve_nvm_alias(&base, "default", &installed).as_deref(),
+            Some("22.5.0")
+        );
+        std::fs::write(base.join("alias/default"), "node\n").unwrap();
+        assert_eq!(
+            resolve_nvm_alias(&base, "default", &installed).as_deref(),
+            Some("23.1.0")
+        );
+        std::fs::write(base.join("alias/default"), "18\n").unwrap();
+        assert_eq!(
+            resolve_nvm_alias(&base, "default", &installed),
+            None,
+            "unresolvable: caller protects all"
+        );
         std::fs::remove_dir_all(&base).unwrap();
     }
 

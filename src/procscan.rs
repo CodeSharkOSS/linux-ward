@@ -56,6 +56,10 @@ pub struct ProcInfo {
     /// `Some(false)` = no installed package owns the binary.
     pub owned: Option<bool>,
     pub remote_ports: Vec<u16>,
+    /// Name of the parent process (an `ssh` parent makes `nc`/`socat` a ProxyCommand, not a shell).
+    pub parent_comm: String,
+    /// The executable runs from a real AppImage FUSE mount under /tmp/.mount_*.
+    pub appimage_mounted: bool,
 }
 
 const SYSTEM_PREFIXES: &[&str] = &[
@@ -63,7 +67,12 @@ const SYSTEM_PREFIXES: &[&str] = &[
 ];
 const SHELLS: &[&str] = &[
     "sh", "bash", "dash", "zsh", "fish", "ksh", "nc", "ncat", "netcat", "socat", "perl", "python",
-    "python3", "ruby", "php",
+    "ruby", "php",
+];
+/// Programs that merely *mention* a miner name on their command line.
+const VIEWERS: &[&str] = &[
+    "grep", "egrep", "fgrep", "rg", "ag", "vim", "nvim", "vi", "nano", "less", "more", "cat",
+    "head", "tail", "pgrep", "pkill", "man", "sed", "awk", "code", "git",
 ];
 const MINERS: &[&str] = &[
     "xmrig",
@@ -140,14 +149,21 @@ pub fn assess(p: &ProcInfo, home: &str) -> (u32, Vec<String>) {
         Some(x) => (x.to_string(), true),
         None => (exe.clone(), false),
     };
-    let appimage = path.starts_with("/tmp/.mount_");
+    let appimage = p.appimage_mounted;
     let lower_cmd = format!("{} {}", p.name, p.cmdline).to_lowercase();
 
     if path.starts_with("/memfd:") {
-        add!(
-            50,
-            "Runs from memory only (memfd), with no file on disk".into()
-        );
+        // runc re-executes itself from a memfd on every container start; that is normal.
+        if !(path.contains("runc")
+            || p.name.contains("runc")
+            || p.name == "crun"
+            || p.name.contains("conmon"))
+        {
+            add!(
+                50,
+                "Runs from memory only (memfd), with no file on disk".into()
+            );
+        }
     } else if deleted {
         if in_system_dir(&path) {
             add!(10, "Its program file was replaced or removed while running (usually an update: restart it)".into());
@@ -165,7 +181,8 @@ pub fn assess(p: &ProcInfo, home: &str) -> (u32, Vec<String>) {
     {
         add!(40, format!("Runs from a temporary folder ({path})"));
     }
-    if let Some(rest) = path.strip_prefix(home).map(|r| r.trim_start_matches('/')) {
+    if let Ok(rest) = Path::new(&path).strip_prefix(home) {
+        let rest = rest.to_string_lossy();
         let first_hidden = rest.split('/').find(|c| c.starts_with('.') && c.len() > 1);
         if let Some(h) = first_hidden
             && !KNOWN_HIDDEN.contains(&h)
@@ -199,7 +216,7 @@ pub fn assess(p: &ProcInfo, home: &str) -> (u32, Vec<String>) {
         );
     }
     if p.owned == Some(false) && !deleted && !path.is_empty() && !appimage {
-        let in_home = path.starts_with(home);
+        let in_home = Path::new(&path).starts_with(home);
         // Compiled projects and downloaded tools in your home never have a package.
         add!(
             if in_home {
@@ -213,7 +230,14 @@ pub fn assess(p: &ProcInfo, home: &str) -> (u32, Vec<String>) {
         );
     }
     // A local socketpair (IDE terminals, tool harnesses) isn't a reverse shell: it must be a TCP connection.
-    if p.stdio_socket && !p.remote_ports.is_empty() && SHELLS.contains(&p.name.as_str()) {
+    let shell_name = p
+        .name
+        .trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    if p.stdio_socket
+        && !p.remote_ports.is_empty()
+        && SHELLS.contains(&shell_name)
+        && p.parent_comm != "ssh"
+    {
         add!(
             60,
             format!(
@@ -225,7 +249,15 @@ pub fn assess(p: &ProcInfo, home: &str) -> (u32, Vec<String>) {
     for l in &p.preload {
         add!(35, format!("Injects a library with LD_PRELOAD: {l}"));
     }
-    if MINERS.iter().any(|m| lower_cmd.contains(m)) {
+    let argv0 = p
+        .cmdline
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .rsplit('/')
+        .next()
+        .unwrap_or("");
+    if !VIEWERS.contains(&argv0) && MINERS.iter().any(|m| lower_cmd.contains(m)) {
         add!(60, "Name or arguments match a crypto miner".into());
     }
     if p.remote_ports.iter().any(|r| MINING_PORTS.contains(r)) {
@@ -351,8 +383,10 @@ fn connections() -> HashMap<u32, Vec<u16>> {
         .stdout
         .lines()
     {
-        let f: Vec<&str> = l.split_whitespace().collect();
-        let (Some(peer), Some(users)) = (f.get(3), f.get(4)) else {
+        // Everything from "users:" on may contain spaces (process names like "Web Content").
+        let (head, users) = l.split_once("users:").unwrap_or((l, ""));
+        let f: Vec<&str> = head.split_whitespace().collect();
+        let Some(peer) = f.get(3) else {
             continue;
         };
         let Some(port) = peer
@@ -374,7 +408,32 @@ fn connections() -> HashMap<u32, Vec<u16>> {
     map
 }
 
-fn gather(pid: u32, my_uid: u32) -> Option<ProcInfo> {
+/// Mount points of FUSE filesystems (AppImages mount themselves at /tmp/.mount_*).
+fn fuse_mounts() -> Vec<String> {
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (before, after) = l.split_once(" - ")?;
+            let mount_point = before.split_whitespace().nth(4)?;
+            after
+                .split_whitespace()
+                .next()?
+                .starts_with("fuse")
+                .then(|| mount_point.to_string())
+        })
+        .collect()
+}
+
+/// LD_PRELOAD libraries that ordinary software sets: system library folders and Steam's overlay.
+fn benign_preload(lib: &str) -> bool {
+    ["/usr/lib/", "/usr/lib64/", "/lib/", "/lib64/"]
+        .iter()
+        .any(|d| lib.starts_with(d))
+        || lib.rsplit('/').next() == Some("gameoverlayrenderer.so")
+}
+
+fn gather(pid: u32, my_uid: u32, fuse: &[String]) -> Option<ProcInfo> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     let uid = status_uid(&status);
     let cmd_raw = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
@@ -404,13 +463,25 @@ fn gather(pid: u32, my_uid: u32) -> Option<ProcInfo> {
                     .split([' ', ':'])
                     .filter(|l| l.starts_with('/'))
                 {
-                    if !lib.starts_with("/usr/lib") && !lib.starts_with("/lib") {
+                    if !benign_preload(lib) {
                         preload.push(lib.to_string());
                     }
                 }
             }
         }
     }
+    let ppid: u32 = status
+        .lines()
+        .find_map(|l| l.strip_prefix("PPid:"))
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0);
+    let parent_comm = read(format!("/proc/{ppid}/comm")).trim().to_string();
+    let appimage_mounted = exe.as_deref().is_some_and(|e| {
+        e.starts_with("/tmp/.mount_")
+            && fuse
+                .iter()
+                .any(|m| m.starts_with("/tmp/.mount_") && Path::new(e).starts_with(m))
+    });
     Some(ProcInfo {
         pid,
         uid,
@@ -419,6 +490,8 @@ fn gather(pid: u32, my_uid: u32) -> Option<ProcInfo> {
         cmdline,
         stdio_socket,
         preload,
+        parent_comm,
+        appimage_mounted,
         ..Default::default()
     })
 }
@@ -451,10 +524,11 @@ pub fn scan() -> ScanResult {
     let my_uid = unsafe { libc::geteuid() };
     let home = crate::util::home().display().to_string();
     let me = std::process::id();
+    let fuse = fuse_mounts();
     let mut procs: Vec<ProcInfo> = numeric_pids()
         .into_iter()
         .filter(|&p| p != me)
-        .filter_map(|p| gather(p, my_uid))
+        .filter_map(|p| gather(p, my_uid, &fuse))
         .collect();
 
     // CPU over one second.
@@ -479,10 +553,16 @@ pub fn scan() -> ScanResult {
         .filter(|e| {
             !e.ends_with(" (deleted)")
                 && e.starts_with('/')
-                && !e.starts_with(&home)
+                && !Path::new(e).starts_with(&home)
                 && !e.starts_with("/memfd:")
                 && !e.starts_with("/tmp/")
                 && !e.starts_with("/proc/")
+                // Self-contained app trees, other users' homes and container-internal paths are never
+                // owned by a host package.
+                && !["/snap/", "/nix/", "/app/", "/var/lib/snapd/", "/var/lib/flatpak/", "/home/", "/root/"]
+                    .iter()
+                    .any(|d| e.starts_with(d))
+                && Path::new(e).exists()
         })
         .collect();
     exes.sort();
@@ -493,7 +573,7 @@ pub fn scan() -> ScanResult {
         if let Some(e) = &p.exe {
             if missing.contains(e) {
                 p.owned = Some(false);
-            } else if e.starts_with(&home) || e.starts_with("/tmp/") {
+            } else if Path::new(e).starts_with(&home) || e.starts_with("/tmp/") {
                 p.owned = Some(false); // never packaged
             }
         }
@@ -608,9 +688,15 @@ pub fn suspicious_command(line: &str, home: &str) -> Option<String> {
 fn startup_entries(home: &str) -> Vec<Suspect> {
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut add_dir = |dir: &str, ext: Option<&str>| {
+        // A symlinked folder or file could point anywhere (this runs as root in the administrator
+        // scan, with a home path it was given), so only real folders and regular files are read.
+        if std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink()) {
+            return;
+        }
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
             let p = e.path();
-            if p.is_file() && ext.is_none_or(|x| p.extension().is_some_and(|e| e == x)) {
+            let regular = e.file_type().is_ok_and(|t| t.is_file());
+            if regular && ext.is_none_or(|x| p.extension().is_some_and(|e| e == x)) {
                 files.push(p);
             }
         }
@@ -788,10 +874,16 @@ mod tests {
             assess(&ide, "/home/u").0 < 15,
             "a packaged-less IDE in a known hidden dir is fine"
         );
+        let mut appimage = p("app", "/tmp/.mount_AppAbc/app");
+        appimage.appimage_mounted = true;
         assert_eq!(
-            assess(&p("app", "/tmp/.mount_AppAbc/app"), "/home/u").0,
+            assess(&appimage, "/home/u").0,
             0,
-            "AppImages run from /tmp/.mount_*"
+            "real AppImages run from a FUSE mount"
+        );
+        assert!(
+            assess(&p("app", "/tmp/.mount_x/payload"), "/home/u").0 >= 40,
+            "a lookalike path that isn't a mount is still a temp-folder program"
         );
     }
 
@@ -822,6 +914,42 @@ mod tests {
         let mut pre = p("ls", "/usr/bin/ls");
         pre.preload = vec!["/tmp/evil.so".into()];
         assert!(assess(&pre, h).0 >= 35);
+    }
+
+    #[test]
+    fn known_benign_cases_stay_quiet() {
+        let h = "/home/u";
+        // Steam preloads its overlay into every game.
+        assert!(benign_preload(
+            "/home/u/.local/share/Steam/ubuntu12_64/gameoverlayrenderer.so"
+        ));
+        assert!(
+            benign_preload("/usr/lib64/libfoo.so") && !benign_preload("/usr/library-evil/x.so")
+        );
+        // runc starts containers from a memfd copy of itself.
+        assert_eq!(
+            assess(&p("runc", "/memfd:runc_cloned:/proc/self/exe (deleted)"), h).0,
+            0
+        );
+        // nc as an ssh ProxyCommand has a socketpair on stdio and a TCP connection.
+        let mut proxy = p("nc", "/usr/bin/nc");
+        proxy.stdio_socket = true;
+        proxy.remote_ports = vec![22];
+        proxy.parent_comm = "ssh".into();
+        assert_eq!(assess(&proxy, h).0, 0);
+        proxy.parent_comm = "bash".into();
+        assert!(assess(&proxy, h).0 >= 60);
+        // python3.12 is a shell-capable interpreter too.
+        let mut py = p("python3.12", "/usr/bin/python3.12");
+        py.stdio_socket = true;
+        py.remote_ports = vec![4444];
+        assert!(assess(&py, h).0 >= 60);
+        // A viewer that mentions a miner is not a miner.
+        let mut grep = p("grep", "/usr/bin/grep");
+        grep.cmdline = "grep xmrig notes.txt".into();
+        assert_eq!(assess(&grep, h).0, 0);
+        // /home/ab is not inside /home/a.
+        assert_eq!(assess(&p("x", "/home/ab/.x/bin/x"), "/home/a").0, 0);
     }
 
     #[test]

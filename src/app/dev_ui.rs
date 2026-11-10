@@ -178,7 +178,7 @@ impl App {
                         egui::CollapsingHeader::new(format!("{}  ({} .git · {} merged branches)", r.r.path.display(), human(r.r.git_size), r.branches.len()))
                             .id_salt(&r.r.path)
                             .show(ui, |ui| {
-                                ui.checkbox(&mut r.gc, "Compact (git gc --prune=now)");
+                                ui.checkbox(&mut r.gc, "Compact (git gc)");
                                 for (b, sel) in &mut r.branches {
                                     ui.checkbox(sel, format!("Delete merged branch {b}"));
                                 }

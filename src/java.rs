@@ -142,21 +142,46 @@ fn gc_name(flags: &str) -> Option<String> {
 
 /// "garbage-first heap total reserved 2097152K, committed 1133568K, used 777237K" -> used bytes.
 fn heap_used(text: &str) -> Option<u64> {
-    let l = text.lines().find(|l| l.contains("used "))?;
-    let after = l.split("used ").nth(1)?;
-    let tok: String = after
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
+    // "... used 777237K" / "... 1G used" -> bytes.
+    fn used_on(line: &str) -> Option<u64> {
+        let after = line.split("used ").nth(1)?;
+        let tok: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        let unit = after[tok.len()..].chars().next()?;
+        let n: f64 = tok.parse().ok()?;
+        let mul = match unit {
+            'K' => 1024.0,
+            'M' => MIB as f64,
+            'G' => GIB as f64,
+            _ => 1.0,
+        };
+        Some((n * mul) as u64)
+    }
+    // G1 reports the whole heap on one line; Parallel and Serial report one line per generation,
+    // and the first of them is only the young generation, so the generations are added up.
+    if let Some(l) = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("garbage-first heap"))
+    {
+        return used_on(l);
+    }
+    let generations = [
+        "PSYoungGen",
+        "ParOldGen",
+        "def new generation",
+        "tenured generation",
+    ];
+    let parts: Vec<u64> = text
+        .lines()
+        .filter(|l| generations.iter().any(|g| l.contains(g)))
+        .filter_map(used_on)
         .collect();
-    let unit = after[tok.len()..].chars().next()?;
-    let n: f64 = tok.parse().ok()?;
-    let mul = match unit {
-        'K' => 1024.0,
-        'M' => MIB as f64,
-        'G' => GIB as f64,
-        _ => 1.0,
-    };
-    Some((n * mul) as u64)
+    if !parts.is_empty() {
+        return Some(parts.iter().sum());
+    }
+    text.lines().find(|l| l.contains("used ")).and_then(used_on)
 }
 
 /// Best-effort name of the application a JVM process is running.
@@ -964,6 +989,16 @@ mod tests {
             parse_props("    java.version = 21.0.6\n    java.vendor = Oracle Corporation\n"),
             ("21.0.6".into(), "Oracle Corporation".into())
         );
+    }
+
+    #[test]
+    fn heap_used_adds_up_generations_for_parallel_and_serial() {
+        let g1 = "garbage-first heap   total reserved 2097152K, committed 1133568K, used 777237K [0x1, 0x2)";
+        assert_eq!(heap_used(g1), Some(777237 * 1024));
+        let parallel = " PSYoungGen      total 76288K, used 10000K [0x1, 0x2)\n ParOldGen       total 175104K, used 20000K [0x3, 0x4)\n";
+        assert_eq!(heap_used(parallel), Some(30000 * 1024));
+        let serial = " def new generation   total 9216K, used 1000K [0x1)\n tenured generation   total 20480K, used 2000K [0x2)\n";
+        assert_eq!(heap_used(serial), Some(3000 * 1024));
     }
 
     #[test]

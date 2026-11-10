@@ -72,6 +72,17 @@ fn same_bytes(a: &Path, b: &Path) -> bool {
     }
 }
 
+const SKIP_TREES: &[&str] = &[
+    "node_modules",
+    ".git",
+    "site-packages",
+    ".venv",
+    "venv",
+    ".steam",
+    ".wine",
+    "__pycache__",
+];
+
 type Candidate = (PathBuf, u64, Option<SystemTime>);
 
 /// Hash, then byte-compare, the files that share one size. Returns the confirmed duplicate sets.
@@ -125,7 +136,9 @@ pub fn scan(root: &Path, min_size: u64, include_hidden: bool) -> (Vec<DupGroup>,
         .into_iter()
         .filter_entry(|e| {
             e.depth() == 0
-                || (!crate::util::excluded(e.path())
+                // Copies in these trees are expected at their exact paths by tools and games.
+                || (!(e.file_type().is_dir() && SKIP_TREES.contains(&e.file_name().to_string_lossy().as_ref()))
+                    && !crate::util::excluded(e.path())
                     && (include_hidden || !e.file_name().to_string_lossy().starts_with('.')))
         })
         .filter_map(Result::ok)

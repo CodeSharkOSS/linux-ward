@@ -587,8 +587,24 @@ fn owner(pm: Pm, path: &Path) -> Option<(String, String)> {
             (out.ok && !n.is_empty()).then(|| (n.to_string(), s.to_string()))
         }
         Pm::Apt => {
-            let out = run("dpkg", &["-S", &p]);
-            let name = out.stdout.lines().next()?.split(':').next()?.to_string();
+            // dpkg's database may record /lib/... where systemd reports /usr/lib/... (merged /usr).
+            let mut out = run("dpkg", &["-S", &p]);
+            if !out.ok
+                && let Some(alt) = p.strip_prefix("/usr")
+            {
+                out = run("dpkg", &["-S", alt]);
+            }
+            // "pkg1, pkg2: /path": take the first owner, not the whole list.
+            let name = out
+                .stdout
+                .lines()
+                .next()?
+                .split(':')
+                .next()?
+                .split(", ")
+                .next()?
+                .trim()
+                .to_string();
             let sum = run("dpkg-query", &["-W", "-f", "${binary:Summary}", &name]).stdout;
             (out.ok && !name.is_empty()).then_some((name, sum))
         }

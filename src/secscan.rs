@@ -108,14 +108,14 @@ const HISTORY: &[&str] = &[
 ];
 
 fn is_example(name: &str) -> bool {
-    ["example", "sample", "template", "dist", "default"]
-        .iter()
-        .any(|w| name.to_lowercase().contains(w))
+    name.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| matches!(w, "example" | "sample" | "template" | "dist" | "default"))
 }
 
 fn alnum_run(s: &str, min: usize) -> bool {
     s.chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
         .count()
         >= min
 }
@@ -156,7 +156,12 @@ fn line_secret(line: &str) -> Option<&'static str> {
             } else {
                 alnum_run(rest, min.saturating_sub(needle.len()).max(10))
             };
-            if before_ok && body_ok {
+            let placeholder = line[i..]
+                .chars()
+                .take(needle.len() + min)
+                .collect::<String>()
+                .contains("EXAMPLE");
+            if before_ok && body_ok && !placeholder {
                 return Some(what);
             }
         }
@@ -187,6 +192,55 @@ fn path_ext_is(p: &Path, exts: &[&str]) -> bool {
         .is_some_and(|e| exts.contains(&e.to_lowercase().as_str()))
 }
 
+/// Minimal base64 decoder (standard alphabet), enough to read an OpenSSH key header.
+fn b64(text: &str) -> Vec<u8> {
+    let val = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let (mut out, mut acc, mut bits) = (Vec::new(), 0u32, 0u32);
+    for v in text.bytes().filter_map(val) {
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    out
+}
+
+/// For an OpenSSH-format private key block: Some(true) when the key has no passphrase
+/// (cipher "none"). ssh-keygen has used this format by default since OpenSSH 7.8.
+fn openssh_unencrypted(text: &str) -> Option<bool> {
+    let body: String = text
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .take(3)
+        .collect();
+    let raw = b64(&body);
+    let rest = raw.strip_prefix(b"openssh-key-v1\0")?;
+    let len = u32::from_be_bytes(rest.get(..4)?.try_into().ok()?) as usize;
+    Some(rest.get(4..4 + len)? == b"none")
+}
+
+/// A `.pem`/`.key`-style file that holds no private key (certificate, licence text, Keynote file).
+fn is_public_material(path: &Path, head: &[u8]) -> bool {
+    if !path_ext_is(path, &["pem", "key", "crt", "cer"]) {
+        return false;
+    }
+    let text = String::from_utf8_lossy(head);
+    if head.starts_with(b"PK") {
+        return true; // a zip container, e.g. an Apple Keynote file
+    }
+    !head.contains(&0) && !text.contains("PRIVATE KEY")
+}
+
 fn read_head(path: &Path, max: usize) -> Option<Vec<u8>> {
     let mut buf = vec![0u8; max];
     let n = File::open(path).ok()?.read(&mut buf).ok()?;
@@ -210,7 +264,20 @@ fn by_name(path: &Path, name: &str, mode: u32) -> Option<(Severity, String, Stri
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let in_dir = |d: &str| path.components().any(|c| c.as_os_str() == d);
+    let parent_is = |d: &str| {
+        path.parent()
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n == d)
+    };
+    let in_dir = |d: &str| {
+        parent_is(d)
+            && (d != "gh"
+                || path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .and_then(|p| p.file_name())
+                    .is_some_and(|n| n == ".config"))
+    };
     let exposed = mode & 0o077 != 0;
     let sev = |base: Severity| if exposed { Severity::High } else { base };
 
@@ -349,22 +416,23 @@ fn check_file(path: &Path, name: &str, mode: u32, size: u64, opts: Options) -> O
         && let Some(head) = read_head(path, 4096)
     {
         let text = String::from_utf8_lossy(&head);
-        let textual = !head.contains(&0);
-        let pemish = path_ext_is(path, &["pem", "key", "crt", "cer"]);
-        if textual && pemish && kind.contains("Key or certificate") && !text.contains("PRIVATE KEY")
-        {
-            hit = None; // a public certificate or licence text, not a secret
-        } else if text.contains("PRIVATE KEY")
-            && !text.contains("ENCRYPTED")
-            && !text.contains("BEGIN OPENSSH")
-        {
-            hit = hit.map(|(s, k, d)| {
-                (
-                    s.min(Severity::Medium),
-                    k,
-                    format!("{d}. Not protected by a passphrase"),
-                )
-            });
+        if kind.contains("Key or certificate") && is_public_material(path, &head) {
+            hit = None; // a public certificate, licence text or Keynote file, not a secret
+        } else if text.contains("PRIVATE KEY") {
+            let unprotected = if text.contains("BEGIN OPENSSH") {
+                openssh_unencrypted(&text) == Some(true)
+            } else {
+                !text.contains("ENCRYPTED")
+            };
+            if unprotected {
+                hit = hit.map(|(s, k, d)| {
+                    (
+                        s.min(Severity::Medium),
+                        k,
+                        format!("{d}. Not protected by a passphrase"),
+                    )
+                });
+            }
         }
     }
 
@@ -489,6 +557,15 @@ pub fn scan(root: &Path, opts: Options) -> (Vec<Finding>, usize) {
     (findings, scanned)
 }
 
+/// Files whose secret-looking lines are documentation, fixtures or vendored code.
+fn history_path_ignored(file: &str) -> bool {
+    let p = Path::new(file);
+    p.components()
+        .any(|c| SKIP_DIRS.contains(&c.as_os_str().to_string_lossy().as_ref()))
+        || p.file_name()
+            .is_some_and(|n| is_example(&n.to_string_lossy()))
+}
+
 /// Secrets committed to a git repository: tracked files that should never be tracked, and
 /// secret-looking lines added in the last 300 commits. Removing a secret from the working tree
 /// does not remove it from history, which is why history is checked at all.
@@ -503,9 +580,16 @@ pub fn scan_git_repo(repo: &Path) -> Vec<Finding> {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        if let Some((_, kind, _)) = by_name(&path, &name, 0o600)
-            && !kind.contains("history")
+        let Some((_, kind, _)) = by_name(&path, &name, 0o600) else {
+            continue;
+        };
+        // A committed public certificate or licence file is not a leak.
+        if kind.contains("Key or certificate")
+            && read_head(&path, 4096).is_some_and(|h| is_public_material(&path, &h))
         {
+            continue;
+        }
+        if !kind.contains("history") {
             out.push(Finding {
                 path,
                 severity: Severity::High,
@@ -516,9 +600,9 @@ pub fn scan_git_repo(repo: &Path) -> Vec<Finding> {
             });
         }
     }
-    let log = run(
-        "git",
-        &[
+    // Stream the history instead of capturing it: lockfile and minified-asset diffs can be huge.
+    let child = std::process::Command::new("git")
+        .args([
             "-C",
             &r,
             "-c",
@@ -534,30 +618,42 @@ pub fn scan_git_repo(repo: &Path) -> Vec<Finding> {
             "--no-textconv",
             "--diff-filter=AM",
             "--format=@@commit %h",
-        ],
-    );
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else { return out };
     let (mut commit, mut file) = (String::new(), String::new());
     let mut seen = std::collections::HashSet::new();
-    for line in log.stdout.lines().take(2_000_000) {
-        if let Some(h) = line.strip_prefix("@@commit ") {
-            commit = h.to_string();
-        } else if let Some(f) = line.strip_prefix("+++ b/") {
-            file = f.to_string();
-        } else if let Some(added) = line.strip_prefix('+')
-            && !line.starts_with("+++")
-            && let Some(what) = line_secret(added)
-            && seen.insert((file.clone(), what))
-        {
-            out.push(Finding {
-                path: repo.join(&file),
-                severity: Severity::High,
-                kind: format!("{what} in git history"),
-                detail: format!("Added in commit {commit}. Deleting the line doesn't remove it from history; rotate the secret."),
-                mode: 0,
-                fixable: false,
-            });
+    if let Some(stdout) = child.stdout.take() {
+        use std::io::BufRead;
+        for raw in std::io::BufReader::new(stdout).split(b'\n').take(400_000) {
+            let Ok(raw) = raw else { break };
+            let line = String::from_utf8_lossy(&raw);
+            if let Some(h) = line.strip_prefix("@@commit ") {
+                commit = h.to_string();
+            } else if let Some(f) = line.strip_prefix("+++ b/") {
+                file = f.to_string();
+            } else if let Some(added) = line.strip_prefix('+')
+                && !line.starts_with("+++")
+                && !history_path_ignored(&file)
+                && let Some(what) = line_secret(added)
+                && seen.insert((file.clone(), what))
+            {
+                out.push(Finding {
+                    path: repo.join(&file),
+                    severity: Severity::High,
+                    kind: format!("{what} in git history"),
+                    detail: format!("Added in commit {commit}. Deleting the line doesn't remove it from history; rotate the secret."),
+                    mode: 0,
+                    fixable: false,
+                });
+            }
         }
     }
+    let _ = child.kill();
+    let _ = child.wait();
     out
 }
 
@@ -567,7 +663,12 @@ pub fn restrict(path: &Path) -> Result<(), String> {
     if meta.file_type().is_symlink() {
         return Err("is a symlink".into());
     }
-    let mode = if meta.is_dir() { 0o700 } else { 0o600 };
+    // Drop group/other access only: a script keeps its owner execute bit.
+    let mode = if meta.is_dir() {
+        0o700
+    } else {
+        (meta.permissions().mode() & 0o700) | 0o600
+    };
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())
 }
 
@@ -578,7 +679,7 @@ mod tests {
     #[test]
     fn detects_known_formats_without_false_positives() {
         assert_eq!(
-            line_secret("key = \x41KIAIOSFODNN7EXAMPLE"),
+            line_secret("key = \x41KIAQ3Z7MWB5NVR2XK4T"),
             Some("AWS access key ID")
         );
         assert_eq!(
@@ -598,8 +699,52 @@ mod tests {
             line_secret("url = https://${USER}:${PASS}@example.com"),
             None
         );
-        assert_eq!(line_secret("let x = \"B\x41KIAIOSFODNN7EXAMPLE\""), None);
+        assert_eq!(line_secret("let x = \"B\x41KIAQ3Z7MWB5NVR2XK4T\""), None);
         assert_eq!(line_secret("AKIA short"), None);
+    }
+
+    #[test]
+    fn placeholders_and_dashed_tokens() {
+        // AWS's documented placeholder key is not a leak; real-looking tokens with '-' are.
+        assert_eq!(
+            line_secret("key = \x41KIA{}EXAMPLE".replace("{}", "IOSFODNN7").as_str()),
+            None
+        );
+        assert_eq!(
+            line_secret("t = \x78oxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"),
+            Some("Slack bot token")
+        );
+        assert_eq!(
+            line_secret("k = \x41Iza\x53yA-1234567890abcdefghijklmnopqrstu"),
+            Some("Google API key")
+        );
+        assert!(is_example(".env.example") && !is_example("redistributable.pem"));
+    }
+
+    #[test]
+    fn openssh_keys_report_whether_they_have_a_passphrase() {
+        let plain = format!(
+            "\x2d----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAAAAAAAA==\n-----END OPENSSH PRIVATE KEY-----\n"
+        );
+        let locked = format!(
+            "\x2d----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAAAAAAAA==\n-----END OPENSSH PRIVATE KEY-----\n"
+        );
+        assert_eq!(openssh_unencrypted(&plain), Some(true));
+        assert_eq!(openssh_unencrypted(&locked), Some(false));
+        assert_eq!(openssh_unencrypted("not a key"), None);
+    }
+
+    #[test]
+    fn restrict_keeps_the_execute_bit() {
+        let f = std::env::temp_dir().join(format!("secscan-restrict-{}", std::process::id()));
+        std::fs::write(&f, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        restrict(&f).unwrap();
+        assert_eq!(
+            std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::remove_file(&f).unwrap();
     }
 
     #[test]
@@ -672,7 +817,7 @@ mod tests {
         };
         g(&["init", "-q"]);
         std::fs::write(dir.join(".netrc"), "machine x login y password z").unwrap();
-        std::fs::write(dir.join("conf.txt"), "key = \x41KIAIOSFODNN7EXAMPLE\n").unwrap();
+        std::fs::write(dir.join("conf.txt"), "key = \x41KIAQ3Z7MWB5NVR2XK4T\n").unwrap();
         g(&["add", "-A"]);
         g(&["commit", "-q", "-m", "x"]);
         std::fs::write(dir.join("conf.txt"), "clean\n").unwrap();
