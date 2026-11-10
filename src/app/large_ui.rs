@@ -156,7 +156,7 @@ impl App {
                             .clicked()
                             && let Some(parent) = f.path.parent()
                         {
-                            let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+                            util::open(parent);
                         }
                     });
                 });

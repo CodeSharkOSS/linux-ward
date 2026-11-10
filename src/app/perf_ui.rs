@@ -540,7 +540,7 @@ impl App {
 fn pressure_bar(ui: &mut egui::Ui, p: &Pressure) {
     let now = p.some[0];
     let mut bar = egui::ProgressBar::new((now / 100.0).clamp(0.0, 1.0))
-        .desired_width(ui.available_width())
+        .desired_width(ui.available_width().min(1000.0))
         .text(format!(
             "{:.1}% now · {:.1}% 1 min · {:.1}% 5 min stalled",
             p.some[0], p.some[1], p.some[2]

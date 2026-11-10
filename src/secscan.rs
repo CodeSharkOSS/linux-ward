@@ -531,6 +531,7 @@ pub fn scan_git_repo(repo: &Path) -> Vec<Finding> {
             "-U0",
             "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
             "--diff-filter=AM",
             "--format=@@commit %h",
         ],

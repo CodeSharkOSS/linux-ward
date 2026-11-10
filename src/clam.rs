@@ -130,6 +130,40 @@ pub fn scan_folder(dir: &str) -> Outcome {
     }
 }
 
+/// Write `text` to a new file in the temp folder that only this user can read. `create_new`
+/// refuses an existing file or symlink, so another local user can't pre-create the name.
+fn write_private_temp(text: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    for attempt in 0..20 {
+        let path = std::env::temp_dir().join(format!(
+            "diskclean-clam-{}-{nanos}-{attempt}.txt",
+            std::process::id()
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                f.write_all(text.as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "no free temp file name",
+    ))
+}
+
 pub fn scan_files(paths: &[String], label: &str) -> Outcome {
     let Some(t) = tool() else {
         return no_tool(label);
@@ -142,15 +176,17 @@ pub fn scan_files(paths: &[String], label: &str) -> Outcome {
             ..Default::default()
         };
     }
-    let list = std::env::temp_dir().join(format!("diskclean-clam-{}.txt", std::process::id()));
-    if let Err(e) = std::fs::write(&list, paths.join("\n")) {
-        return Outcome {
-            target: label.into(),
-            tool: Some(t),
-            error: Some(format!("couldn't write the file list: {e}")),
-            ..Default::default()
-        };
-    }
+    let list = match write_private_temp(&paths.join("\n")) {
+        Ok(p) => p,
+        Err(e) => {
+            return Outcome {
+                target: label.into(),
+                tool: Some(t),
+                error: Some(format!("couldn't write the file list: {e}")),
+                ..Default::default()
+            };
+        }
+    };
     let arg = format!("--file-list={}", list.display());
     let out = execute(t, label, &[&arg]);
     let _ = std::fs::remove_file(&list);
@@ -160,6 +196,21 @@ pub fn scan_files(paths: &[String], label: &str) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temp_file_list_is_private_and_unique() {
+        use std::os::unix::fs::PermissionsExt;
+        let a = write_private_temp("one").unwrap();
+        let b = write_private_temp("two").unwrap();
+        assert_ne!(a, b);
+        assert_eq!(
+            std::fs::metadata(&a).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "one");
+        std::fs::remove_file(a).unwrap();
+        std::fs::remove_file(b).unwrap();
+    }
 
     #[test]
     fn parses_clamav_output() {
