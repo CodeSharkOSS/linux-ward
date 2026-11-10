@@ -11,6 +11,7 @@ use egui_extras::{Column, TableBuilder};
 mod dupes_ui;
 mod java_ui;
 mod perf_ui;
+mod security_ui;
 mod services_ui;
 
 use crate::java;
@@ -30,6 +31,7 @@ enum Msg {
     Upgradable(Option<HashMap<String, String>>),
     Large(Vec<(PathBuf, u64)>, usize),
     Dupes(Vec<crate::dupes::DupGroup>, usize),
+    Security(Vec<crate::secscan::Finding>, usize),
     Perf(Box<perf::Snapshot>),
     Java(Box<java::JavaReport>),
     Services(Scope, Vec<services::Svc>),
@@ -69,6 +71,7 @@ enum Tab {
     Packages,
     LargeFiles,
     Duplicates,
+    Security,
     Performance,
     Services,
     Java,
@@ -171,6 +174,12 @@ pub struct App {
     dupes_scanned: usize,
     dupes_hidden: bool,
 
+    sec: Vec<security_ui::SecEntry>,
+    sec_scanning: bool,
+    sec_root: String,
+    sec_contents: bool,
+    sec_scanned: usize,
+
     perf: Option<perf::Snapshot>,
     perf_loading: bool,
     live: Option<perf::Live>,
@@ -242,6 +251,11 @@ impl App {
             dupes_min_mb: 1,
             dupes_scanned: 0,
             dupes_hidden: false,
+            sec: vec![],
+            sec_scanning: false,
+            sec_root: util::home().display().to_string(),
+            sec_contents: true,
+            sec_scanned: 0,
             perf: None,
             perf_loading: false,
             live: None,
@@ -380,6 +394,14 @@ impl App {
                     self.dupes_scanned = scanned;
                     self.dupes_scanning = false;
                 }
+                Msg::Security(found, scanned) => {
+                    self.sec = found
+                        .into_iter()
+                        .map(|f| security_ui::SecEntry { f, selected: false })
+                        .collect();
+                    self.sec_scanned = scanned;
+                    self.sec_scanning = false;
+                }
                 Msg::Perf(p) => {
                     self.perf_loading = false;
                     let alive: HashSet<&String> = p.kernels.iter().map(|k| &k.version).collect();
@@ -446,6 +468,8 @@ impl App {
                             .retain(|f| std::fs::symlink_metadata(&f.path).is_ok());
                     }
                     self.dupes.retain(|g| g.files.len() > 1);
+                    self.sec
+                        .retain(|e| std::fs::symlink_metadata(&e.f.path).is_ok());
                     if refresh {
                         self.refresh();
                     }
@@ -597,6 +621,7 @@ impl App {
             });
             ui.selectable_value(&mut self.tab, Tab::LargeFiles, "Large files");
             ui.selectable_value(&mut self.tab, Tab::Duplicates, "Duplicates");
+            ui.selectable_value(&mut self.tab, Tab::Security, "Security");
             ui.selectable_value(&mut self.tab, Tab::Performance, "Performance");
             ui.selectable_value(&mut self.tab, Tab::Services, "Services");
             ui.selectable_value(&mut self.tab, Tab::Java, "Java");
@@ -1466,6 +1491,7 @@ impl eframe::App for App {
             Tab::Packages => self.packages_tab(ui),
             Tab::LargeFiles => self.large_tab(ui),
             Tab::Duplicates => self.dupes_tab(ui),
+            Tab::Security => self.security_tab(ui),
             Tab::Performance => self.performance_tab(ui),
             Tab::Services => self.services_tab(ui),
             Tab::Java => self.java_tab(ui),

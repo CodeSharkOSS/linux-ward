@@ -26,6 +26,11 @@ A small Linux desktop app, written in Rust with [egui/eframe](https://github.com
 **Duplicates tab**
 - Finds identical files under a folder (matched by size, then hash, then a byte-for-byte check; hard links are ignored). Keep one copy per set and move the rest to Trash. It refuses to select every copy of a file.
 
+**Security tab**
+- Scans a folder (your home by default) for files that commonly hold secrets: SSH and TLS private keys, `.env` files, cloud/registry/Kubernetes/Docker credentials, stored git and database logins, wallets, and shell history. Optionally looks inside small text files for private-key blocks, AWS/GitHub/GitLab/Slack/Stripe/Google tokens and passwords embedded in URLs.
+- Ranks findings by risk (keys readable by other users rank highest) and flags unencrypted private keys, `~/.ssh` / `~/.gnupg` that aren't private, and world-writable files.
+- Secret values are never displayed or stored. **Restrict** runs `chmod` to 600/700; you can also move files to Trash. Findings are leads to review, not proof of a leak.
+
 **Performance tab**
 - Live CPU, memory and I/O pressure, boot-time analysis, and recommendations with one-click fixes.
 - Startup items: system services and autostart apps you can switch off.

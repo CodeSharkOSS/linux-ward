@@ -5,6 +5,7 @@ mod dupes;
 mod java;
 mod perf;
 mod pkg;
+mod secscan;
 mod services;
 mod targets;
 mod util;
