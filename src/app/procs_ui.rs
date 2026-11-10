@@ -51,6 +51,7 @@ impl App {
         self.procs = r.suspects;
         self.procs_inspected = r.inspected;
         self.procs_opaque = r.opaque;
+        self.procs_exes = r.exes;
         self.procs_scanning = false;
         self.procs_scanned = true;
     }
@@ -89,7 +90,12 @@ impl App {
             ui.horizontal(|ui| {
                 let idle = !self.clam_scanning && self.busy.is_none();
                 if ui.add_enabled(idle, egui::Button::new("Scan running programs")).on_hover_text("Scans the program file behind every process that is running now").clicked() {
-                    let exes = procscan::running_executables();
+                    // From the last process scan: it covers every user's programs after an administrator scan.
+                    let exes = if self.procs_exes.is_empty() {
+                        procscan::running_executables()
+                    } else {
+                        self.procs_exes.clone()
+                    };
                     let label = format!("{} running programs", exes.len());
                     job = Some(ClamJob::Files(exes, label));
                 }
@@ -98,6 +104,9 @@ impl App {
                 ui.add(egui::TextEdit::singleline(&mut self.clam_dir).desired_width(260.0));
                 if ui.add_enabled(idle && !self.clam_dir.trim().is_empty(), egui::Button::new("Scan folder")).clicked() {
                     job = Some(ClamJob::Folder(self.clam_dir.trim().to_string()));
+                }
+                if self.procs_opaque > 0 && !self.clam_scanning {
+                    ui.label(RichText::new(format!("covers your own programs only: use \"Scan all processes…\" below first to include {} other processes", self.procs_opaque)).weak().size(12.0));
                 }
                 if self.clam_scanning {
                     ui.spinner();

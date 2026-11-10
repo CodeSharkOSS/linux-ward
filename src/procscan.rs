@@ -442,6 +442,8 @@ pub struct ScanResult {
     pub inspected: usize,
     /// Processes owned by other users whose details this account can't read.
     pub opaque: usize,
+    /// Program files of the processes that could be inspected (all of them when run as root).
+    pub exes: Vec<String>,
 }
 
 pub fn scan() -> ScanResult {
@@ -524,6 +526,7 @@ pub fn scan() -> ScanResult {
         suspects,
         inspected: procs.len(),
         opaque,
+        exes: running_executables(),
     }
 }
 
@@ -675,6 +678,9 @@ fn clean(s: &str) -> String {
 /// One line per suspect, tab-separated, so no serialisation library is needed.
 pub fn encode(r: &ScanResult) -> String {
     let mut out = format!("H\t{}\t{}\n", r.inspected, r.opaque);
+    for e in &r.exes {
+        out.push_str(&format!("E\t{}\n", clean(e)));
+    }
     for s in &r.suspects {
         out.push_str(&format!(
             "S\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -707,6 +713,7 @@ pub fn decode(text: &str) -> Option<ScanResult> {
                 r.opaque = f[2].parse().ok()?;
                 got_header = true;
             }
+            Some("E") if f.len() == 2 => r.exes.push(f[1].to_string()),
             Some("S") if f.len() == 9 => r.suspects.push(Suspect {
                 pid: f[1].parse().ok(),
                 score: f[2].parse().ok()?,
@@ -736,6 +743,7 @@ mod tests {
         let r = ScanResult {
             inspected: 12,
             opaque: 3,
+            exes: vec!["/usr/bin/a".into()],
             suspects: vec![Suspect {
                 pid: Some(42),
                 name: "we\tird".into(),
@@ -754,6 +762,7 @@ mod tests {
         assert_eq!((s.pid, s.score, s.uid), (Some(42), 85, 0));
         assert_eq!(s.reasons, vec!["one", "two; three"]);
         assert_eq!(s.name, "we ird");
+        assert_eq!(back.exes, vec!["/usr/bin/a"]);
         assert!(decode("no header here").is_none());
     }
 
