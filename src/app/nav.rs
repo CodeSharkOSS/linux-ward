@@ -59,6 +59,21 @@ impl Tab {
             .unwrap_or(Section::FreeSpace)
     }
 
+    fn icon(self) -> &'static str {
+        match self {
+            Tab::Cleanup => "🗑",
+            Tab::LargeFiles => "📁",
+            Tab::Duplicates => "📋",
+            Tab::Packages => "📦",
+            Tab::Services => "⚙",
+            Tab::Projects => "🏗",
+            Tab::Ports => "🔌",
+            Tab::Java => "☕",
+            Tab::Performance => "🚀",
+            Tab::Security => "🔑",
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Tab::Cleanup => "Quick clean",
@@ -140,10 +155,13 @@ impl App {
         let strip = ui.visuals().faint_bg_color.gamma_multiply(1.6);
         egui::Frame::new()
             .fill(strip)
-            .inner_margin(egui::Margin::symmetric(14, 4))
+            .inner_margin(egui::Margin::symmetric(14, 6))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
+                    // Give each tab room: roomier buttons and more space between them.
+                    ui.spacing_mut().button_padding = egui::vec2(12.0, 6.0);
+                    ui.spacing_mut().item_spacing.x = 10.0;
                     let section = self.tab.section();
                     ui.label(
                         RichText::new(format!(
@@ -162,7 +180,7 @@ impl App {
                             "No supported package manager was found"
                         };
                         let active = self.tab == t;
-                        let text = RichText::new(t.label()).size(13.0);
+                        let text = RichText::new(format!("{}  {}", t.icon(), t.label())).size(14.0);
                         let text = if active {
                             text.strong().color(ui.visuals().hyperlink_color)
                         } else {
