@@ -14,6 +14,7 @@ impl App {
         let root = PathBuf::from(self.sec_root.trim());
         let opts = secscan::Options {
             scan_contents: self.sec_contents,
+            scan_git: self.sec_git,
         };
         let n = self.notifier();
         std::thread::spawn(move || {
@@ -33,6 +34,8 @@ impl App {
             ui.add(egui::TextEdit::singleline(&mut self.sec_root).desired_width(260.0));
             ui.checkbox(&mut self.sec_contents, "Look inside text files for keys and tokens")
                 .on_hover_text("Reads small config/text files and looks for private keys, cloud and API tokens, and passwords in URLs. Secret values are never shown or stored.");
+            ui.checkbox(&mut self.sec_git, "Check git repos")
+                .on_hover_text("Finds secret files that are committed to git and secrets added in the last 300 commits of each repository");
             if self.sec_scanning {
                 ui.spinner();
                 ui.label(RichText::new("scanning…").weak());

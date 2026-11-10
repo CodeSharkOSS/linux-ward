@@ -1,16 +1,32 @@
 use eframe::egui;
 
 mod app;
+mod devclean;
 mod dupes;
 mod java;
 mod perf;
 mod pkg;
+mod ports;
 mod secscan;
 mod services;
 mod targets;
 mod util;
 
 fn main() -> eframe::Result {
+    if std::env::args().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "diskclean — free disk space and keep a Linux system tidy\n\n\
+             USAGE:\n  diskclean            open the window\n  diskclean --scan     print what could be reclaimed, change nothing\n  \
+             diskclean --clean [--dry-run]\n                       run the safe, pre-selected cleanups that need no password\n                       (Trash, crash-free caches...); --dry-run only lists them\n\n\
+             Folders listed in ~/.config/diskclean/exclude (one per line) are skipped by every scan.\n\
+             Actions are logged to ~/.local/state/diskclean/actions.log"
+        );
+        return Ok(());
+    }
+    if std::env::args().any(|a| a == "--clean") {
+        clean_cli(std::env::args().any(|a| a == "--dry-run"));
+        return Ok(());
+    }
     if std::env::args().any(|a| a == "--scan") {
         scan_report();
         return Ok(());
@@ -28,6 +44,36 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
     )
+}
+
+/// `diskclean --clean [--dry-run]`: run the targets that are pre-selected as safe and need no
+/// administrator rights. Nothing is deleted with --dry-run.
+fn clean_cli(dry_run: bool) {
+    use util::human;
+    let pm = pkg::Pm::detect();
+    let targets: Vec<targets::Target> = targets::scan_all(pm, &Default::default())
+        .into_iter()
+        .filter(|t| t.selected && !t.needs_root())
+        .collect();
+    if targets.is_empty() {
+        println!("Nothing to clean.");
+        return;
+    }
+    for t in &targets {
+        println!(
+            "{} {:<24} {}",
+            if dry_run { "would clean" } else { "cleaning" },
+            t.name,
+            t.size.map(human).unwrap_or_else(|| "?".into())
+        );
+    }
+    if dry_run {
+        return;
+    }
+    targets::execute(&targets, &mut |l| {
+        util::log_action(&l);
+        println!("{l}");
+    });
 }
 
 /// `diskclean --scan`: print what the GUI would show, without changing anything.

@@ -8,6 +8,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use eframe::egui::{self, Align, Color32, Layout, RichText};
 use egui_extras::{Column, TableBuilder};
 
+mod dev_ui;
 mod dupes_ui;
 mod java_ui;
 mod perf_ui;
@@ -31,6 +32,10 @@ enum Msg {
     Upgradable(Option<HashMap<String, String>>),
     Large(Vec<(PathBuf, u64)>, usize),
     Dupes(Vec<crate::dupes::DupGroup>, usize),
+    DevArtifacts(Vec<crate::devclean::Artifact>),
+    DevToolchains(Vec<crate::devclean::Toolchain>),
+    DevRepos(Vec<crate::devclean::Repo>),
+    Ports(Result<Vec<crate::ports::Listener>, String>),
     Security(Vec<crate::secscan::Finding>, usize),
     Perf(Box<perf::Snapshot>),
     Java(Box<java::JavaReport>),
@@ -72,6 +77,8 @@ enum Tab {
     LargeFiles,
     Duplicates,
     Security,
+    Projects,
+    Ports,
     Performance,
     Services,
     Java,
@@ -178,6 +185,18 @@ pub struct App {
     sec_scanning: bool,
     sec_root: String,
     sec_contents: bool,
+    sec_git: bool,
+
+    dev_root: String,
+    dev_scanning: bool,
+    dev_idle_days: u64,
+    dev_art: Vec<dev_ui::ArtEntry>,
+    dev_tc: Vec<dev_ui::TcEntry>,
+    dev_repos: Vec<dev_ui::RepoEntry>,
+    ports: Vec<crate::ports::Listener>,
+    ports_loaded: bool,
+    ports_loading: bool,
+    ports_error: Option<String>,
     sec_scanned: usize,
 
     perf: Option<perf::Snapshot>,
@@ -255,6 +274,17 @@ impl App {
             sec_scanning: false,
             sec_root: util::home().display().to_string(),
             sec_contents: true,
+            sec_git: true,
+            dev_root: util::home().display().to_string(),
+            dev_scanning: false,
+            dev_idle_days: 90,
+            dev_art: vec![],
+            dev_tc: vec![],
+            dev_repos: vec![],
+            ports: vec![],
+            ports_loaded: false,
+            ports_loading: false,
+            ports_error: None,
             sec_scanned: 0,
             perf: None,
             perf_loading: false,
@@ -402,6 +432,33 @@ impl App {
                     self.sec_scanned = scanned;
                     self.sec_scanning = false;
                 }
+                Msg::DevArtifacts(a) => {
+                    self.dev_art = a
+                        .into_iter()
+                        .map(|a| dev_ui::ArtEntry { a, sel: false })
+                        .collect();
+                }
+                Msg::DevToolchains(t) => {
+                    self.dev_tc = t
+                        .into_iter()
+                        .map(|t| dev_ui::TcEntry { t, sel: false })
+                        .collect();
+                }
+                Msg::DevRepos(r) => {
+                    self.dev_repos = r.into_iter().map(dev_ui::RepoEntry::new).collect();
+                    self.dev_scanning = false;
+                }
+                Msg::Ports(r) => {
+                    self.ports_loading = false;
+                    self.ports_loaded = true;
+                    match r {
+                        Ok(v) => {
+                            self.ports = v;
+                            self.ports_error = None;
+                        }
+                        Err(e) => self.ports_error = Some(e),
+                    }
+                }
                 Msg::Perf(p) => {
                     self.perf_loading = false;
                     let alive: HashSet<&String> = p.kernels.iter().map(|k| &k.version).collect();
@@ -454,6 +511,7 @@ impl App {
                     }
                 }
                 Msg::Log(l) => {
+                    util::log_action(&l);
                     self.log.push(l);
                     if self.log.len() > 5000 {
                         self.log.drain(..1000);
@@ -468,6 +526,8 @@ impl App {
                             .retain(|f| std::fs::symlink_metadata(&f.path).is_ok());
                     }
                     self.dupes.retain(|g| g.files.len() > 1);
+                    self.dev_prune();
+                    self.ports_loaded = false;
                     self.sec
                         .retain(|e| std::fs::symlink_metadata(&e.f.path).is_ok());
                     if refresh {
@@ -566,9 +626,10 @@ impl App {
                 .into_iter()
                 // Hidden folders hold toolchains, caches and app data that are rarely safe to delete by hand.
                 .filter_entry(|e| {
-                    include_hidden
-                        || e.depth() == 0
-                        || !e.file_name().to_string_lossy().starts_with('.')
+                    e.depth() == 0
+                        || (!util::excluded(e.path())
+                            && (include_hidden
+                                || !e.file_name().to_string_lossy().starts_with('.')))
                 })
                 .filter_map(Result::ok)
                 .filter(|e| e.file_type().is_file())
@@ -615,16 +676,27 @@ impl App {
         ui.horizontal(|ui| {
             ui.heading("🧹 Disk Cleaner");
             ui.separator();
-            ui.selectable_value(&mut self.tab, Tab::Cleanup, "Cleanup");
-            ui.add_enabled_ui(self.pm.is_some(), |ui| {
-                ui.selectable_value(&mut self.tab, Tab::Packages, "Packages");
-            });
-            ui.selectable_value(&mut self.tab, Tab::LargeFiles, "Large files");
-            ui.selectable_value(&mut self.tab, Tab::Duplicates, "Duplicates");
-            ui.selectable_value(&mut self.tab, Tab::Security, "Security");
-            ui.selectable_value(&mut self.tab, Tab::Performance, "Performance");
-            ui.selectable_value(&mut self.tab, Tab::Services, "Services");
-            ui.selectable_value(&mut self.tab, Tab::Java, "Java");
+            // Eleven tabs don't fit a narrow window: let them scroll sideways.
+            egui::ScrollArea::horizontal()
+                .id_salt("tabs")
+                .max_width((ui.available_width() - 130.0).max(200.0))
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.tab, Tab::Cleanup, "Cleanup");
+                        ui.add_enabled_ui(self.pm.is_some(), |ui| {
+                            ui.selectable_value(&mut self.tab, Tab::Packages, "Packages");
+                        });
+                        ui.selectable_value(&mut self.tab, Tab::LargeFiles, "Large files");
+                        ui.selectable_value(&mut self.tab, Tab::Duplicates, "Duplicates");
+                        ui.selectable_value(&mut self.tab, Tab::Security, "Security");
+                        ui.selectable_value(&mut self.tab, Tab::Projects, "Projects");
+                        ui.selectable_value(&mut self.tab, Tab::Ports, "Ports");
+                        ui.selectable_value(&mut self.tab, Tab::Performance, "Performance");
+                        ui.selectable_value(&mut self.tab, Tab::Services, "Services");
+                        ui.selectable_value(&mut self.tab, Tab::Java, "Java");
+                    });
+                });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if let Some(b) = &self.busy {
                     ui.label(b);
@@ -1492,6 +1564,8 @@ impl eframe::App for App {
             Tab::LargeFiles => self.large_tab(ui),
             Tab::Duplicates => self.dupes_tab(ui),
             Tab::Security => self.security_tab(ui),
+            Tab::Projects => self.projects_tab(ui),
+            Tab::Ports => self.ports_tab(ui),
             Tab::Performance => self.performance_tab(ui),
             Tab::Services => self.services_tab(ui),
             Tab::Java => self.java_tab(ui),

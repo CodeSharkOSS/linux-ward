@@ -38,6 +38,8 @@ pub struct Finding {
 #[derive(Clone, Copy)]
 pub struct Options {
     pub scan_contents: bool,
+    /// Check git repositories for tracked secret files and secrets in recent history.
+    pub scan_git: bool,
 }
 
 /// Folders that are huge, regenerable, or full of other people's code rather than your secrets.
@@ -347,7 +349,8 @@ pub fn scan(root: &Path, opts: Options) -> (Vec<Finding>, usize) {
         .filter_entry(|e| {
             let n = e.file_name().to_string_lossy();
             e.depth() == 0
-                || !(e.file_type().is_dir() && SKIP_DIRS.contains(&n.as_ref()))
+                || !crate::util::excluded(e.path())
+                    && !(e.file_type().is_dir() && SKIP_DIRS.contains(&n.as_ref()))
                     && !(n == "objects" && e.path().parent().is_some_and(|p| p.ends_with(".git")))
         })
         .filter_map(Result::ok)
@@ -451,12 +454,88 @@ pub fn scan(root: &Path, opts: Options) -> (Vec<Finding>, usize) {
             });
         }
     }
+    if opts.scan_git {
+        for repo in crate::devclean::repos_under(root) {
+            findings.extend(scan_git_repo(&repo));
+        }
+    }
     findings.sort_by(|a, b| {
         a.severity
             .cmp(&b.severity)
             .then_with(|| a.path.cmp(&b.path))
     });
     (findings, scanned)
+}
+
+/// Secrets committed to a git repository: tracked files that should never be tracked, and
+/// secret-looking lines added in the last 300 commits. Removing a secret from the working tree
+/// does not remove it from history, which is why history is checked at all.
+pub fn scan_git_repo(repo: &Path) -> Vec<Finding> {
+    use crate::util::run;
+    let r = repo.to_string_lossy().to_string();
+    let mut out = Vec::new();
+    let tracked = run("git", &["-C", &r, "-c", "core.quotepath=off", "ls-files"]);
+    for rel in tracked.stdout.lines() {
+        let path = repo.join(rel);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if let Some((_, kind, _)) = by_name(&path, &name, 0o600)
+            && !kind.contains("history")
+        {
+            out.push(Finding {
+                path,
+                severity: Severity::High,
+                kind: format!("{kind} committed to git"),
+                detail: format!("Tracked in {}. Anyone with the repository can read it; rotate it if the repo was ever shared.", repo.display()),
+                mode: 0,
+                fixable: false,
+            });
+        }
+    }
+    let log = run(
+        "git",
+        &[
+            "-C",
+            &r,
+            "-c",
+            "core.quotepath=off",
+            "log",
+            "--all",
+            "-n",
+            "300",
+            "-p",
+            "-U0",
+            "--no-color",
+            "--no-ext-diff",
+            "--diff-filter=AM",
+            "--format=@@commit %h",
+        ],
+    );
+    let (mut commit, mut file) = (String::new(), String::new());
+    let mut seen = std::collections::HashSet::new();
+    for line in log.stdout.lines().take(2_000_000) {
+        if let Some(h) = line.strip_prefix("@@commit ") {
+            commit = h.to_string();
+        } else if let Some(f) = line.strip_prefix("+++ b/") {
+            file = f.to_string();
+        } else if let Some(added) = line.strip_prefix('+')
+            && !line.starts_with("+++")
+            && let Some(what) = line_secret(added)
+            && seen.insert((file.clone(), what))
+        {
+            out.push(Finding {
+                path: repo.join(&file),
+                severity: Severity::High,
+                kind: format!("{what} in git history"),
+                detail: format!("Added in commit {commit}. Deleting the line doesn't remove it from history; rotate the secret."),
+                mode: 0,
+                fixable: false,
+            });
+        }
+    }
+    out
 }
 
 /// Remove group/world access: 700 for folders, 600 for files.
@@ -523,6 +602,7 @@ mod tests {
             &dir,
             Options {
                 scan_contents: true,
+                scan_git: false,
             },
         );
         assert_eq!(scanned, 5);
@@ -541,6 +621,49 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&key.path).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn git_scan_finds_tracked_secret_files_and_history() {
+        if !crate::util::which("git") {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("secscan-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = |args: &[&str]| {
+            let mut a = vec![
+                "-C",
+                dir.to_str().unwrap(),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ];
+            a.extend_from_slice(args);
+            assert!(crate::util::run("git", &a).ok, "git {args:?} failed");
+        };
+        g(&["init", "-q"]);
+        std::fs::write(dir.join(".netrc"), "machine x login y password z").unwrap();
+        std::fs::write(dir.join("conf.txt"), "key = \x41KIAIOSFODNN7EXAMPLE\n").unwrap();
+        g(&["add", "-A"]);
+        g(&["commit", "-q", "-m", "x"]);
+        std::fs::write(dir.join("conf.txt"), "clean\n").unwrap();
+        g(&["commit", "-q", "-am", "remove key"]);
+        let f = scan_git_repo(&dir);
+        assert!(
+            f.iter()
+                .any(|x| x.kind.contains("committed to git") && x.path.ends_with(".netrc")),
+            "{f:?}"
+        );
+        assert!(
+            f.iter()
+                .any(|x| x.kind.contains("AWS access key ID in git history")),
+            "{f:?}"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

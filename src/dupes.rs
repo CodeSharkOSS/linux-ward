@@ -82,7 +82,9 @@ pub fn scan(root: &Path, min_size: u64, include_hidden: bool) -> (Vec<DupGroup>,
         .same_file_system(true)
         .into_iter()
         .filter_entry(|e| {
-            include_hidden || e.depth() == 0 || !e.file_name().to_string_lossy().starts_with('.')
+            e.depth() == 0
+                || (!crate::util::excluded(e.path())
+                    && (include_hidden || !e.file_name().to_string_lossy().starts_with('.')))
         })
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())

@@ -12,6 +12,8 @@ use crate::util::{
 pub enum Action {
     /// Delete the contents of these directories as the current user.
     ClearDirs(Vec<PathBuf>),
+    /// Delete these directories themselves (project build folders, old toolchains).
+    RemoveDirs(Vec<PathBuf>),
     /// Run these commands as the current user.
     User(Vec<Vec<String>>),
     /// Run these commands as root (batched into one pkexec prompt).
@@ -77,6 +79,10 @@ pub fn scan_all(pm: Option<Pm>, pkg_sizes: &HashMap<String, u64>) -> Vec<Target>
         Box::new(go_cache),
         Box::new(gradle_cache),
         Box::new(maven_cache),
+        Box::new(pnpm_store),
+        Box::new(conda_pkgs),
+        Box::new(nuget_cache),
+        Box::new(bundler_cache),
         Box::new(|| container_cache("docker")),
         Box::new(|| container_cache("podman")),
     ];
@@ -400,6 +406,64 @@ fn npm_cache() -> Option<Target> {
     })
 }
 
+/// A developer cache that is just a directory which tools re-fill on demand.
+fn simple_dev_cache(name: &str, description: &str, dirs: Vec<PathBuf>) -> Option<Target> {
+    let dirs: Vec<PathBuf> = dirs.into_iter().filter(|d| d.is_dir()).collect();
+    if dirs.is_empty() {
+        return None;
+    }
+    Some(Target {
+        name: name.into(),
+        description: description.into(),
+        size: Some(dirs.iter().map(|d| dir_usage(d)).sum()),
+        details: vec![],
+        action: Action::ClearDirs(dirs),
+        selected: false,
+        group: Group::Developer,
+    })
+}
+
+fn pnpm_store() -> Option<Target> {
+    simple_dev_cache(
+        "pnpm store",
+        "pnpm's shared package store. Projects re-link from the network the next time they install.",
+        vec![
+            util::xdg_data().join("pnpm/store"),
+            home().join(".pnpm-store"),
+        ],
+    )
+}
+
+fn conda_pkgs() -> Option<Target> {
+    simple_dev_cache(
+        "Conda package cache",
+        "Downloaded conda/mamba packages and tarballs (pkgs). Existing environments keep working only if their files are copies, not hard links; clean with `conda clean` if unsure.",
+        vec![
+            home().join(".conda/pkgs"),
+            home().join("miniconda3/pkgs"),
+            home().join("anaconda3/pkgs"),
+            home().join("miniforge3/pkgs"),
+            home().join("mambaforge/pkgs"),
+        ],
+    )
+}
+
+fn nuget_cache() -> Option<Target> {
+    simple_dev_cache(
+        "NuGet packages",
+        "Downloaded .NET packages in ~/.nuget/packages. Restored on the next build.",
+        vec![home().join(".nuget/packages")],
+    )
+}
+
+fn bundler_cache() -> Option<Target> {
+    simple_dev_cache(
+        "Bundler cache",
+        "Cached .gem files in ~/.bundle/cache. Re-downloaded on the next `bundle install`.",
+        vec![home().join(".bundle/cache")],
+    )
+}
+
 fn gradle_cache() -> Option<Target> {
     let base = std::env::var_os("GRADLE_USER_HOME")
         .map(PathBuf::from)
@@ -568,6 +632,21 @@ pub fn execute(targets: &[Target], log: &mut dyn FnMut(String)) {
                         errors[0]
                     ));
                 }
+            }
+            Action::RemoveDirs(dirs) => {
+                let mut freed = 0;
+                for d in dirs {
+                    match util::remove_dir_checked(d) {
+                        Ok(n) => freed += n,
+                        Err(e) => log(format!("✘ {}: {e}", d.display())),
+                    }
+                }
+                log(format!(
+                    "✔ {}: removed {} folder(s), freed {}",
+                    t.name,
+                    dirs.len(),
+                    human(freed)
+                ));
             }
             Action::User(cmds) => {
                 for c in cmds {

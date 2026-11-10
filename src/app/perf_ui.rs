@@ -566,6 +566,12 @@ pub(super) fn action_lines(a: &Action) -> (Vec<String>, bool) {
     match a {
         Action::Root(c) => (c.iter().map(|c| c.join(" ")).collect(), true),
         Action::User(c) => (c.iter().map(|c| c.join(" ")).collect(), false),
+        Action::RemoveDirs(d) => (
+            d.iter()
+                .map(|p| format!("delete {}", p.display()))
+                .collect(),
+            false,
+        ),
         Action::ClearDirs(d) => (
             d.iter().map(|p| format!("clear {}", p.display())).collect(),
             false,

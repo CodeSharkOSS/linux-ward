@@ -12,7 +12,7 @@ A small Linux desktop app, written in Rust with [egui/eframe](https://github.com
   - Package manager cache (`apt-get clean`, `dnf clean all`, `paccache`, `zypper clean`)
   - Unused dependencies / orphaned packages (with the list and per-package size)
   - Unused Flatpak runtimes and disabled Snap revisions
-  - Developer caches: Cargo registry, npm, Go, Gradle, Maven, unused Docker/Podman images, containers and build cache (volumes are never removed)
+  - Developer caches: Cargo registry, npm, Go, Gradle, Maven, pnpm, Conda, NuGet, Bundler, unused Docker/Podman images, containers and build cache (volumes are never removed)
 - Everything that needs root is batched into **one** password prompt via `pkexec`.
 
 **Packages tab**
@@ -28,8 +28,17 @@ A small Linux desktop app, written in Rust with [egui/eframe](https://github.com
 
 **Security tab**
 - Scans a folder (your home by default) for files that commonly hold secrets: SSH and TLS private keys, `.env` files, cloud/registry/Kubernetes/Docker credentials, stored git and database logins, wallets, and shell history. Optionally looks inside small text files for private-key blocks, AWS/GitHub/GitLab/Slack/Stripe/Google tokens and passwords embedded in URLs.
+- With **Check git repos** on, also finds secret files committed to git and secrets added in the last 300 commits (deleting a line doesn't remove it from history).
 - Ranks findings by risk (keys readable by other users rank highest) and flags unencrypted private keys, `~/.ssh` / `~/.gnupg` that aren't private, and world-writable files.
 - Secret values are never displayed or stored. **Restrict** runs `chmod` to 600/700; you can also move files to Trash. Findings are leads to review, not proof of a leak.
+
+**Projects tab** (for developers)
+- **Build artifacts:** scans a code folder for regenerable output (Rust/Maven `target/`, `node_modules/`, Gradle/CMake `build/`, Python virtualenvs and caches, Composer `vendor/`, .NET `bin/`/`obj/`) and shows size and days idle. "Select untouched for over N days" picks the stale ones. Each folder is only listed when a marker file proves it is generated, so an unrelated folder called `target` is never touched.
+- **Language toolchains:** old versions from rustup, nvm, SDKMAN and pyenv; the one in use is protected.
+- **Git repositories:** compact with `git gc` and delete merged branches (`git branch -d`, which refuses unmerged ones).
+
+**Ports tab**
+- Lists TCP ports something is listening on, which process owns them, and whether they're reachable from the network or only locally. Stop your own leftover dev servers with one click (SIGTERM, after a confirmation).
 
 **Performance tab**
 - Live CPU, memory and I/O pressure, boot-time analysis, and recommendations with one-click fixes.
@@ -48,6 +57,17 @@ A small Linux desktop app, written in Rust with [egui/eframe](https://github.com
 - Find files above a size threshold under any folder; move them to Trash or delete permanently. Hidden folders are skipped by default.
 
 Supported package managers: **apt** (Debian/Ubuntu/Mint/Pop!_OS), **dnf** (Fedora/RHEL), **pacman** (Arch/Manjaro/EndeavourOS), **zypper** (openSUSE).
+
+## Command line and configuration
+
+```sh
+diskclean --scan             # print what could be reclaimed
+diskclean --clean --dry-run  # list the safe, password-free cleanups it would run
+diskclean --clean            # run them (e.g. from cron)
+```
+
+- `~/.config/diskclean/exclude`: one folder per line (`~/` allowed, `#` comments). Every scan skips them.
+- `~/.local/state/diskclean/actions.log`: a timestamped record of everything the app did.
 
 ## Build
 

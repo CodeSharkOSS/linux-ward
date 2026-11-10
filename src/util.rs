@@ -66,6 +66,87 @@ pub fn clear_dir_contents(dir: &Path) -> (u64, Vec<String>) {
     (before.saturating_sub(after), errors)
 }
 
+/// Delete a directory tree after sanity checks: it must be a real directory (not a symlink),
+/// deep enough that it can't be `/`, a home directory or a top-level system folder.
+pub fn remove_dir_checked(dir: &Path) -> Result<u64, String> {
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err("not a plain directory".into());
+    }
+    if !dir.is_absolute() || dir.components().count() < 4 || dir == home() {
+        return Err("refusing to delete a top-level folder".into());
+    }
+    let size = dir_usage(dir);
+    std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
+    Ok(size)
+}
+
+fn config_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".config"))
+        .join("diskclean")
+}
+
+/// Paths listed (one per line, `#` comments) in `~/.config/diskclean/exclude`. Every scan skips them.
+pub fn excluded(path: &Path) -> bool {
+    static LIST: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    let list = LIST.get_or_init(|| {
+        std::fs::read_to_string(config_dir().join("exclude"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|l| match l.strip_prefix("~/") {
+                Some(rest) => home().join(rest),
+                None => PathBuf::from(l),
+            })
+            .collect()
+    });
+    list.iter().any(|p| path.starts_with(p))
+}
+
+/// Append a line to `~/.local/state/diskclean/actions.log` (best effort).
+pub fn log_action(line: &str) {
+    let dir = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".local/state"))
+        .join("diskclean");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("actions.log"))
+    {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "{} {line}", utc_stamp(secs));
+    }
+}
+
+/// Unix seconds → "YYYY-MM-DD HH:MM:SS" (UTC).
+fn utc_stamp(secs: u64) -> String {
+    let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
+    // Howard Hinnant's civil-from-days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct DiskInfo {
     pub mount: String,
@@ -361,6 +442,11 @@ pub fn parse_size(s: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn utc_stamp_formats() {
+        assert_eq!(super::utc_stamp(0), "1970-01-01 00:00:00 UTC");
+        assert_eq!(super::utc_stamp(1_700_000_000), "2023-11-14 22:13:20 UTC");
+    }
     use super::*;
 
     #[test]
