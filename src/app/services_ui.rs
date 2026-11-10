@@ -22,7 +22,7 @@ impl App {
         let (n, scope, pm) = (self.notifier(), self.svc_scope, self.pm);
         std::thread::spawn(move || {
             let d = services::load_detail(scope, &svc, pm);
-            n.send(Msg::SvcDetail(svc.unit, Box::new(d)));
+            n.send(Msg::SvcDetail(scope, svc.unit, Box::new(d)));
         });
     }
 
@@ -71,8 +71,11 @@ impl App {
             }
             let detail: Option<std::sync::Arc<Detail>> = self.svc_detail.get(&svc.unit).cloned();
             let idle = self.busy.is_none();
-            let protected =
-                self.svc_scope == Scope::System && crate::perf::service_protected(&svc.unit);
+            let protected = if self.svc_scope == Scope::System {
+                crate::perf::service_protected(&svc.unit)
+            } else {
+                crate::perf::user_service_protected(&svc.unit)
+            };
             egui::Panel::right("svc_detail").frame(egui::Frame::side_top_panel(ui.style()).fill(ui.visuals().extreme_bg_color).inner_margin(10.0)).resizable(true).default_size(440.0).min_size(300.0).show(ui, |ui| {
                 egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -178,6 +181,9 @@ impl App {
                 self.svc_sel = None;
                 self.svc_detail.clear();
                 self.svc_pending.clear();
+                // The old list belongs to the other scope: acting on it would run commands in the wrong one.
+                self.svcs.clear();
+                self.svc_loaded = false;
             }
             ui.add(
                 egui::TextEdit::singleline(&mut self.svc_filter)

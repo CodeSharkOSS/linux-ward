@@ -125,11 +125,54 @@ const PROTECTED_SERVICES: &[&str] = &[
     "chronyd",
     "mdmonitor",
     "rtkit",
+    // Remote access, network and firewall units whose names differ between distros.
+    "ssh",
+    "user-runtime-dir@",
+    "wpa_supplicant",
+    "iwd",
+    "apparmor",
+    "ufw",
+    "nftables",
+    "iptables",
+    "ip6tables",
+    "networking",
+    "rsyslog",
+    "cron",
+    "crond",
+    "zfs",
+    "multipathd",
+];
+
+/// Units of the desktop session that must keep running in "Your session" scope.
+const PROTECTED_USER_SERVICES: &[&str] = &[
+    "org.gnome.Shell",
+    "org.gnome.SettingsDaemon",
+    "gnome-session",
+    "gnome-shell",
+    "dbus",
+    "pipewire",
+    "wireplumber",
+    "at-spi",
+    "xdg-desktop-portal",
+    "xdg-document-portal",
+    "xdg-permission-store",
+    "dconf",
+    "gvfs",
+    "plasma-",
+    "kwin",
+    "ssh-agent",
+    "gpg-agent",
+    "gcr-ssh-agent",
 ];
 
 /// Essential services that the app will not stop or disable.
 pub fn service_protected(unit: &str) -> bool {
     PROTECTED_SERVICES.iter().any(|p| unit.starts_with(p))
+}
+
+/// Same for the user manager: stopping the shell, dbus or the sound server ends the session.
+pub fn user_service_protected(unit: &str) -> bool {
+    PROTECTED_USER_SERVICES.iter().any(|p| unit.starts_with(p))
 }
 
 fn load_services(blame: &[(f64, String)]) -> Vec<Service> {
@@ -230,13 +273,26 @@ pub fn set_autostart(a: &Autostart, enable: bool) -> Result<(), String> {
     let has_system_copy = Path::new("/etc/xdg/autostart").join(&a.file).exists();
     let err = |e: std::io::Error| format!("{}: {e}", user_path.display());
     if enable && has_system_copy && user_path.exists() {
-        // The user file was only an override – removing it re-enables the system entry.
-        return std::fs::remove_file(&user_path).map_err(err);
+        let text = std::fs::read_to_string(&user_path).map_err(err)?;
+        // Only a file that does nothing but hide the system entry may be removed; one the user
+        // customised (its own Exec= or flags) keeps its contents and just stops being hidden.
+        let pure_override = text.lines().map(str::trim).all(|l| {
+            l.is_empty()
+                || l.starts_with('#')
+                || l == "[Desktop Entry]"
+                || ["Hidden=", "X-GNOME-Autostart-enabled=", "Type=", "Name="]
+                    .iter()
+                    .any(|k| l.starts_with(k))
+        });
+        if pure_override {
+            return std::fs::remove_file(&user_path).map_err(err);
+        }
     }
     let base = if user_path.exists() {
         std::fs::read_to_string(&user_path).map_err(err)?
     } else if has_system_copy {
-        format!("[Desktop Entry]\nType=Application\nName={}\n", a.name)
+        // Start from the real system entry so the copy keeps its Exec= line.
+        std::fs::read_to_string(Path::new("/etc/xdg/autostart").join(&a.file)).map_err(err)?
     } else {
         return Err("autostart file not found".into());
     };
@@ -708,7 +764,8 @@ fn rpm_va_problems(text: &str) -> Vec<&str> {
                 return !l.trim().is_empty();
             };
             let is_attr = second.len() == 1 && "cdglr".contains(second);
-            !(is_attr && "cg".contains(second)) && flags.len() >= 2
+            // c/d/g/l/r mark config, doc, ghost, licence and readme files: edits there aren't damage.
+            !is_attr && flags.len() >= 2
         })
         .collect()
 }
@@ -942,8 +999,13 @@ fn verdict(l: &Live) -> Vec<String> {
             l.mem.some[0]
         ));
     }
-    if l.swap_total > 0 && l.swap_used * 2 > l.swap_total {
-        v.push("More than half of swap is in use – the machine is short of RAM.".into());
+    // Idle pages parked in swap are normal; it only matters when RAM is also nearly gone.
+    if l.swap_total > 0
+        && l.swap_used * 2 > l.swap_total
+        && l.mem_total > 0
+        && l.mem_avail * 5 < l.mem_total
+    {
+        v.push("More than half of swap is in use and little RAM is free – the machine is short of RAM.".into());
     }
     if v.is_empty() {
         v.push("No bottleneck right now: CPU, disk and memory are all keeping up.".into());
@@ -1158,7 +1220,9 @@ pub fn tuning(pm: Option<Pm>, kernels: &[Kernel]) -> Vec<Tuning> {
             }),
         ));
     }
-    if Path::new("/var/lib/system-upgrade").exists() {
+    // /system-update is the trigger for a download that is still waiting for its reboot.
+    let upgrade_staged = std::fs::symlink_metadata("/system-update").is_ok();
+    if Path::new("/var/lib/system-upgrade").exists() && !upgrade_staged {
         let size = util::dir_usage(Path::new("/var/lib/system-upgrade"));
         if size > 50 << 20 {
             v.push(t(
@@ -1362,18 +1426,23 @@ pub fn fstab_sed(device: &str) -> Option<String> {
     if device.is_empty()
         || !device
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "=_./-".contains(c))
+            .all(|c| c.is_ascii_alphanumeric() || "=_./-:".contains(c))
     {
         return None;
     }
     let dev = device.replace('.', "\\.");
+    // Only lines that don't already say nofail/noauto, so running this twice changes nothing.
     Some(format!(
-        "s|^({dev}[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+)([^[:space:]]+)|\\1\\2,{NOFAIL_OPTS}|"
+        "/^{dev}[[:space:]]/{{/nofail|noauto/!s|^({dev}[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+)([^[:space:]]+)|\\1\\2,{NOFAIL_OPTS}|}}"
     ))
 }
 
 pub fn fstab_fix_cmds(issues: &[FstabIssue]) -> Vec<Vec<String>> {
-    let seds: Vec<String> = issues.iter().filter_map(|i| fstab_sed(&i.device)).collect();
+    // One edit per device: two issues on the same device would otherwise each add the options.
+    let mut devices: Vec<&str> = issues.iter().map(|i| i.device.as_str()).collect();
+    devices.sort_unstable();
+    devices.dedup();
+    let seds: Vec<String> = devices.into_iter().filter_map(fstab_sed).collect();
     if seds.is_empty() {
         return vec![];
     }
@@ -1761,7 +1830,8 @@ fn build_recs(
                 tag: "Tuning",
                 title: f.label.clone(),
                 detail: format!("{}: {}", t.title, t.detail),
-                safe: true,
+                // Clearing "failed" marks hides the evidence without fixing the cause.
+                safe: t.title != "Failed services",
                 actions: vec![f.action.clone()],
             });
         }
@@ -2049,14 +2119,26 @@ pub fn undo_items() -> Vec<Undo> {
             cmds.push(strs(&["systemctl", "restart", "tuned-ppd"]));
             what.push_str(" and restores the original power-mode mapping in /etc/tuned/ppd.conf");
         }
-        match &prev {
+        // Deleting the profile while tuned still points at it would break tuned at the next start,
+        // so the delete runs only if switching away succeeded.
+        let switch = match &prev {
             Some(p) => {
-                cmds.push(strs(&["tuned-adm", "profile", p]));
                 what.push_str(&format!(", then switches back to `{p}`"));
+                p.clone()
             }
-            None => what.push_str(". The previous profile wasn't recorded, so pick one afterwards with `tuned-adm profile`"),
-        }
-        cmds.push(strs(&["rm", "-rf", "--", TUNED_DIR]));
+            None => {
+                what.push_str(", then switches to the profile tuned recommends for this machine (the previous one wasn't recorded)");
+                String::new()
+            }
+        };
+        cmds.push(vec![
+            "sh".into(),
+            "-c".into(),
+            "p=\"$1\"; [ -n \"$p\" ] || p=$(tuned-adm recommend) || exit 1; tuned-adm profile \"$p\" && rm -rf -- \"$2\"".into(),
+            "sh".into(),
+            switch,
+            TUNED_DIR.into(),
+        ]);
         v.push(Undo {
             title: "VM tuned profile".into(),
             detail: format!("{what}."),
@@ -2066,8 +2148,19 @@ pub fn undo_items() -> Vec<Undo> {
     if Path::new(FSTAB_BAK).exists() {
         v.push(Undo {
             title: "/etc/fstab changes".into(),
-            detail: format!("Restores /etc/fstab from {FSTAB_BAK}, the copy taken before diskclean added `nofail`. Any edits made to fstab since then are lost."),
-            actions: root(vec![strs(&["cp", "-a", "--", FSTAB_BAK, "/etc/fstab"]), strs(&["systemctl", "daemon-reload"])]),
+            detail: format!(
+                "Restores /etc/fstab from {FSTAB_BAK}, the copy taken {} before diskclean added `nofail`. Edits made to fstab since then (new disks, changed UUIDs) are lost, which can stop the machine booting. The file being replaced is kept as /etc/fstab.diskclean.before-undo.",
+                std::fs::metadata(FSTAB_BAK)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| format!("{} day(s) ago", d.as_secs() / 86_400))
+                    .unwrap_or_else(|| "earlier".into())
+            ),
+            actions: root(vec![
+                strs(&["sh", "-c", "cp -a -- /etc/fstab /etc/fstab.diskclean.before-undo && cp -a -- \"$1\" /etc/fstab.new && mv -f -- /etc/fstab.new /etc/fstab", "sh", FSTAB_BAK]),
+                strs(&["systemctl", "daemon-reload"]),
+            ]),
         });
     }
     if let Ok(text) = std::fs::read_to_string(DISABLED_LIST) {
@@ -2080,12 +2173,18 @@ pub fn undo_items() -> Vec<Undo> {
         units.sort();
         units.dedup();
         if !units.is_empty() {
-            let mut enable = strs(&["systemctl", "enable", "--now"]);
+            // The record is deleted only if every service came back, so a failure can be retried.
+            let mut enable = strs(&[
+                "sh",
+                "-c",
+                "bad=0; for u in \"$@\"; do systemctl enable --now \"$u\" || bad=1; done; [ \"$bad\" = 0 ] && rm -f -- \"$0\"",
+                DISABLED_LIST,
+            ]);
             enable.extend(units.iter().cloned());
             v.push(Undo {
                 title: format!("{} disabled service(s)", units.len()),
                 detail: format!("Re-enables and starts: {}.", units.join(", ")),
-                actions: root(vec![enable, rm(DISABLED_LIST)]),
+                actions: root(vec![enable]),
             });
         }
     }

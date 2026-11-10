@@ -48,13 +48,31 @@ impl App {
                 }
                 n.send(Msg::Log(format!("✔ Permanently deleted {ok} file(s)")));
             } else {
-                match trash::delete_all(&paths) {
-                    Ok(()) => n.send(Msg::Log(format!(
-                        "✔ Moved {} file(s) to Trash. Empty the Trash on the Cleanup tab to free the space.",
-                        paths.len()
-                    ))),
-                    Err(e) => n.send(Msg::Log(format!("✘ Could not move to Trash: {e}"))),
-                }
+                // A path may have vanished since the scan (e.g. a file only present in git history):
+                // skip those, and fall back to one-by-one so a single failure doesn't lose the batch.
+                let present: Vec<PathBuf> = paths
+                    .iter()
+                    .filter(|p| std::fs::symlink_metadata(p).is_ok())
+                    .cloned()
+                    .collect();
+                let missing = paths.len() - present.len();
+                let moved = match trash::delete_all(&present) {
+                    Ok(()) => present.len(),
+                    Err(_) => present
+                        .iter()
+                        .filter(|p| match trash::delete(p) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                n.send(Msg::Log(format!("✘ {}: {e}", p.display())));
+                                false
+                            }
+                        })
+                        .count(),
+                };
+                n.send(Msg::Log(format!(
+                    "✔ Moved {moved} file(s) to Trash{}. Empty the Trash on the Quick clean tab to free the space.",
+                    if missing > 0 { format!(" ({missing} no longer existed)") } else { String::new() }
+                )));
             }
             n.send(Msg::Done { refresh: true });
         });

@@ -46,11 +46,13 @@ enum Msg {
     Ports(Result<Vec<crate::ports::Listener>, String>),
     Procs(Box<crate::procscan::ScanResult>),
     Clam(Box<crate::clam::Outcome>),
+    /// The administrator scan failed or was cancelled: later rescans shouldn't prompt again.
+    ProcsNotElevated,
     Security(Vec<crate::secscan::Finding>, usize),
     Perf(Box<perf::Snapshot>),
     Java(Box<java::JavaReport>),
     Services(Scope, Vec<services::Svc>),
-    SvcDetail(String, Box<services::Detail>),
+    SvcDetail(Scope, String, Box<services::Detail>),
     ReloadPerf,
     Live(Box<perf::Live>),
     Health(Box<perf::HealthResult>),
@@ -228,6 +230,9 @@ pub struct App {
 
     perf: Option<perf::Snapshot>,
     perf_loading: bool,
+    /// A reload was asked for while one was running: run it again when that one lands.
+    perf_reload_pending: bool,
+    refresh_pending: bool,
     live: Option<perf::Live>,
     live_at: Option<std::time::Instant>,
     live_pending: bool,
@@ -326,6 +331,8 @@ impl App {
             sec_scanned: 0,
             perf: None,
             perf_loading: false,
+            perf_reload_pending: false,
+            refresh_pending: false,
             live: None,
             live_at: None,
             live_pending: false,
@@ -367,6 +374,8 @@ impl App {
     /// Rescan disks, packages and cleanup targets.
     fn refresh(&mut self) {
         if self.scanning {
+            // Data from the scan in flight predates the action that asked for this one.
+            self.refresh_pending = true;
             return;
         }
         self.scanning = true;
@@ -434,6 +443,9 @@ impl App {
                     }
                     self.targets = t;
                     self.scanning = false;
+                    if std::mem::take(&mut self.refresh_pending) {
+                        self.refresh();
+                    }
                 }
                 Msg::Packages(res) => {
                     self.pkg_loading = false;
@@ -454,7 +466,10 @@ impl App {
                                 .collect();
                             self.pkg_error = None;
                         }
-                        Err(e) => self.pkg_error = Some(e),
+                        Err(e) => {
+                            self.rows.clear();
+                            self.pkg_error = Some(e);
+                        }
                     }
                 }
                 Msg::Unused(u) => self.unused = u,
@@ -519,6 +534,7 @@ impl App {
                     }
                 }
                 Msg::Procs(r) => self.apply_procs(*r),
+                Msg::ProcsNotElevated => self.procs_elevated = false,
                 Msg::Clam(o) => {
                     self.clam_scanning = false;
                     self.clam_result = Some(*o);
@@ -531,8 +547,13 @@ impl App {
                     self.sel_left.retain(|f| files.contains(f));
                     self.diffs.retain(|f, _| files.contains(f));
                     self.perf = Some(*p);
+                    if std::mem::take(&mut self.perf_reload_pending) {
+                        self.load_perf();
+                    }
                 }
                 Msg::ReloadPerf => {
+                    // The health results describe the system before the fix that just ran.
+                    self.health.clear();
                     self.load_perf();
                     self.load_java();
                     self.svc_loaded = false;
@@ -549,9 +570,12 @@ impl App {
                         self.svc_loaded = true;
                     }
                 }
-                Msg::SvcDetail(unit, d) => {
+                Msg::SvcDetail(scope, unit, d) => {
                     self.svc_pending.remove(&unit);
-                    self.svc_detail.insert(unit, std::sync::Arc::from(d));
+                    // A reply for the other scope would show another unit's files under this name.
+                    if scope == self.svc_scope {
+                        self.svc_detail.insert(unit, std::sync::Arc::from(d));
+                    }
                 }
                 Msg::Live(l) => {
                     self.live = Some(*l);

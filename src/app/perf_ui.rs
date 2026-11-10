@@ -15,6 +15,7 @@ pub(super) const RED: Color32 = Color32::from_rgb(220, 90, 80);
 impl App {
     pub(super) fn load_perf(&mut self) {
         if self.perf_loading {
+            self.perf_reload_pending = true;
             return;
         }
         self.perf_loading = true;
@@ -186,7 +187,7 @@ impl App {
                 }
                 ui.add_space(6.0);
                 if !s.undos.is_empty() {
-                    egui::CollapsingHeader::new(RichText::new(format!("↩ Changes made by diskclean ({}) – undo", s.undos.len())).strong())
+                    egui::CollapsingHeader::new(RichText::new(format!("↩ Changes made by diskclean ({}) – undo", s.undos.len())).strong()).id_salt("perf-undo")
                         .default_open(false)
                         .show(ui, |ui| {
                             for u in &s.undos {
@@ -265,7 +266,7 @@ impl App {
 
             // ---- tuning / quick wins -----------------------------------------------
             let warns = s.tuning.iter().filter(|t| t.level == Level::Warn).count();
-            egui::CollapsingHeader::new(RichText::new(format!("🔧 Quick checks & tuning ({warns} to look at)")).strong())
+            egui::CollapsingHeader::new(RichText::new(format!("🔧 Quick checks & tuning ({warns} to look at)")).strong()).id_salt("perf-checks")
                 .default_open(true)
                 .show(ui, |ui| {
                     for t in &s.tuning {
@@ -318,7 +319,7 @@ impl App {
                 "🚀 Startup items ({} services, {} autostart apps)",
                 s.services.len(),
                 s.autostart.len()
-            )).strong())
+            )).strong()).id_salt("perf-startup")
             .show(ui, |ui| {
                 ui.label(RichText::new("Services enabled at boot, slowest first. Essential system services are locked.").weak());
                 egui::Grid::new("services").striped(true).spacing([14.0, 2.0]).show(ui, |ui| {
@@ -365,7 +366,7 @@ impl App {
                 "🐧 Kernels ({} installed, {} removable)",
                 s.kernels.len(),
                 s.kernels.iter().filter(|k| k.removable()).count()
-            )).strong())
+            )).strong()).id_salt("perf-kernels")
             .default_open(s.kernels.iter().any(|k| k.removable()))
             .show(ui, |ui| {
                 if s.kernels.is_empty() {
@@ -412,7 +413,7 @@ impl App {
             });
 
             // ---- config leftovers -----------------------------------------------------------
-            egui::CollapsingHeader::new(RichText::new(format!("📄 Config leftovers from upgrades ({})", s.leftovers.len())).strong())
+            egui::CollapsingHeader::new(RichText::new(format!("📄 Config leftovers from upgrades ({})", s.leftovers.len())).strong()).id_salt("perf-leftovers")
                 .show(ui, |ui| {
                     if s.leftovers.is_empty() {
                         ui.label("No leftover .rpmnew/.rpmsave style files in /etc. 🎉");

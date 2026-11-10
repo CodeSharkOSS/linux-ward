@@ -105,7 +105,10 @@ impl App {
                 body.rows(40.0, sec.len(), |mut row| {
                     let e = &mut sec[row.index()];
                     row.col(|ui| {
-                        ui.add(egui::Checkbox::without_text(&mut e.selected));
+                        // Folder findings (~/.ssh, ~/.gnupg) are fixed with Restrict; trashing a whole key folder is never intended.
+                        let is_dir = e.f.path.is_dir();
+                        ui.add_enabled(!is_dir, egui::Checkbox::without_text(&mut e.selected))
+                            .on_disabled_hover_text("Use Restrict for folders");
                     });
                     row.col(|ui| {
                         let color = match e.f.severity {
@@ -170,8 +173,13 @@ impl App {
             }
         }
         if trash_now {
+            let size = selected
+                .iter()
+                .filter_map(|p| std::fs::symlink_metadata(p).ok())
+                .map(|m| m.len())
+                .sum();
             self.confirm = Some(Confirm::Files {
-                size: 0,
+                size,
                 paths: selected,
                 permanent: false,
             });

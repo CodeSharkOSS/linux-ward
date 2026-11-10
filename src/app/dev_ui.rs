@@ -123,7 +123,7 @@ impl App {
 
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             let total: u64 = self.dev_art.iter().map(|e| e.a.size).sum();
-            egui::CollapsingHeader::new(RichText::new(format!("🏗 Build artifacts ({} · {})", self.dev_art.len(), human(total))).strong())
+            egui::CollapsingHeader::new(RichText::new(format!("🏗 Build artifacts ({} · {})", self.dev_art.len(), human(total))).strong()).id_salt("dev-artifacts")
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.label(RichText::new("Generated output that your tools rebuild (target/, node_modules/, build/, .venv/…). Deleted folders are not recoverable, but nothing in them is source code.").weak().size(12.0));
@@ -153,7 +153,7 @@ impl App {
                 });
 
             let tc_total: u64 = self.dev_tc.iter().map(|e| e.t.size).sum();
-            egui::CollapsingHeader::new(RichText::new(format!("🧰 Language toolchains ({} · {})", self.dev_tc.len(), human(tc_total))).strong())
+            egui::CollapsingHeader::new(RichText::new(format!("🧰 Language toolchains ({} · {})", self.dev_tc.len(), human(tc_total))).strong()).id_salt("dev-toolchains")
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.label(RichText::new("Old versions of rustup, nvm, SDKMAN and pyenv toolchains; IDE settings, plugins and caches left behind by earlier JetBrains / Android Studio versions; and Android SDK platforms, build-tools, NDKs, system images and emulator devices. The newest version, or one in use, is protected. Old IDE folders hold that version's own settings: the newest version imported them when it first ran.").weak().size(12.0));
@@ -170,7 +170,7 @@ impl App {
                     }
                 });
 
-            egui::CollapsingHeader::new(RichText::new(format!("🌿 Git repositories ({})", self.dev_repos.len())).strong())
+            egui::CollapsingHeader::new(RichText::new(format!("🌿 Git repositories ({})", self.dev_repos.len())).strong()).id_salt("dev-git")
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.label(RichText::new("`git gc` compacts a repository. Merged branches are removed with `git branch -d`, which refuses anything not fully merged.").weak().size(12.0));
@@ -311,7 +311,10 @@ impl App {
                         if l.mine
                             && l.pid.is_some()
                             && ui
-                                .small_button("Stop…")
+                                .add_enabled(
+                                    self.busy.is_none(),
+                                    egui::Button::new("Stop…").small(),
+                                )
                                 .on_hover_text("Ask the process to exit (SIGTERM)")
                                 .clicked()
                         {
@@ -329,7 +332,7 @@ impl App {
             self.confirm = Some(Confirm::Perf {
                 title: format!("Stop {} (port {})", l.process, l.port),
                 note: Some("Sends SIGTERM so the program can shut down cleanly. Unsaved work in it may be lost.".into()),
-                actions: vec![Action::User(vec![vec!["kill".into(), pid.to_string()]])],
+                actions: vec![Action::User(vec![util::kill_checked_cmd(pid, &l.process)])],
             });
         }
     }

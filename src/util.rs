@@ -94,6 +94,19 @@ pub fn has_other_filesystem(dir: &Path) -> bool {
         .any(|e| e.metadata().is_ok_and(|m| m.dev() != dev))
 }
 
+/// argv that sends SIGTERM to `pid` only if it is still running a program called `name`.
+/// The pid comes from a list that may be minutes old; a recycled pid must not be signalled.
+pub fn kill_checked_cmd(pid: u32, name: &str) -> Vec<String> {
+    vec![
+        "sh".into(),
+        "-c".into(),
+        "[ \"$(cat /proc/$1/comm 2>/dev/null)\" = \"$2\" ] && kill \"$1\" || { echo \"process $1 is no longer $2; nothing was stopped\" >&2; exit 1; }".into(),
+        "sh".into(),
+        pid.to_string(),
+        name.to_string(),
+    ]
+}
+
 /// Delete a directory tree after sanity checks: it must be a real directory (not a symlink),
 /// deep enough that it can't be `/`, a home directory or a top-level system folder.
 pub fn remove_dir_checked(dir: &Path) -> Result<u64, String> {

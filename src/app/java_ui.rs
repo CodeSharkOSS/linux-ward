@@ -148,7 +148,7 @@ impl App {
             ui.add_space(6.0);
 
             // ---- running JVMs ---------------------------------------------------------------------
-            egui::CollapsingHeader::new(RichText::new(format!("▶ Running JVMs ({})", r.procs.len())).strong()).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(RichText::new(format!("▶ Running JVMs ({})", r.procs.len())).strong()).id_salt("java-running").default_open(true).show(ui, |ui| {
                 if r.procs.is_empty() {
                     ui.label(RichText::new("No Java programs are running.").weak());
                 }
@@ -159,7 +159,7 @@ impl App {
 
             // ---- installed runtimes ---------------------------------------------------------------
             let (system, bundled): (Vec<_>, Vec<_>) = r.jvms.iter().partition(|j| !j.bundled);
-            egui::CollapsingHeader::new(RichText::new(format!("☕ Installed runtimes ({})", system.len())).strong()).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(RichText::new(format!("☕ Installed runtimes ({})", system.len())).strong()).id_salt("java-installed").default_open(true).show(ui, |ui| {
                 egui::Grid::new("jvms").striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
                     for h in ["Version", "Vendor", "Type", "Support", "Size", "Start-up cache", "Location"] {
                         ui.strong(h);

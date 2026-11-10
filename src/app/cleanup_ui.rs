@@ -96,7 +96,7 @@ impl App {
                 ui.add_space(4.0);
 
                 let mut last_group: Option<Group> = None;
-                for (i, t) in self.targets.iter_mut().enumerate() {
+                for t in self.targets.iter_mut() {
                     if last_group != Some(t.group) {
                         last_group = Some(t.group);
                         ui.add_space(6.0);
@@ -124,7 +124,7 @@ impl App {
                                             RichText::new(format!("{} item(s)", t.details.len()))
                                                 .small(),
                                         )
-                                        .id_salt(("details", i))
+                                        .id_salt(("details", &t.name))
                                         .show(ui, |ui| {
                                             for d in t.details.iter().take(300) {
                                                 ui.label(RichText::new(d).monospace().size(11.5));

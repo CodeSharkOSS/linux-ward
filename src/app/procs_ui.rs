@@ -41,6 +41,7 @@ impl App {
                         why.lines().next().unwrap_or("no result")
                     )));
                     // Fall back to what the current user can see.
+                    n.send(Msg::ProcsNotElevated);
                     n.send(Msg::Procs(Box::new(procscan::scan())));
                 }
             }
@@ -130,7 +131,7 @@ impl App {
                             {
                                 util::open(parent);
                             }
-                            if ui.small_button("Move to Trash…").clicked() {
+                            if ui.add_enabled(self.busy.is_none(), egui::Button::new("Move to Trash…").small()).clicked() {
                                 trash = Some(vec![PathBuf::from(path)]);
                             }
                         });
@@ -151,8 +152,13 @@ impl App {
             self.start_clam(j);
         }
         if let Some(paths) = trash {
+            let size = paths
+                .iter()
+                .filter_map(|p| std::fs::symlink_metadata(p).ok())
+                .map(|m| m.len())
+                .sum();
             self.confirm = Some(Confirm::Files {
-                size: 0,
+                size,
                 paths,
                 permanent: false,
             });
@@ -217,7 +223,7 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                for (i, s) in self.procs.iter().enumerate() {
+                for s in self.procs.iter() {
                     let (label, color) = match s.level() {
                         Level::High => ("HIGH", Color32::from_rgb(230, 90, 80)),
                         Level::Medium => ("MEDIUM", Color32::from_rgb(230, 170, 60)),
@@ -231,7 +237,7 @@ impl App {
                         .color(color)
                         .strong();
                     egui::CollapsingHeader::new(head)
-                        .id_salt(("proc", i))
+                        .id_salt(("proc", s.pid, &s.name, &s.exe))
                         .default_open(s.level() == Level::High)
                         .show(ui, |ui| {
                             for r in &s.reasons {
@@ -272,7 +278,10 @@ impl App {
                                 }
                                 if real
                                     && ui
-                                        .small_button("Scan file with ClamAV")
+                                        .add_enabled(
+                                            !self.clam_scanning && self.busy.is_none(),
+                                            egui::Button::new("Scan file with ClamAV").small(),
+                                        )
                                         .on_hover_text("Needs ClamAV (clamscan / clamdscan)")
                                         .clicked()
                                 {
@@ -315,7 +324,7 @@ impl App {
         if let Some(s) = stop
             && let Some(pid) = s.pid
         {
-            let kill = vec!["kill".to_string(), pid.to_string()];
+            let kill = util::kill_checked_cmd(pid, &s.name);
             // SAFETY: geteuid has no preconditions.
             let own_uid = unsafe { libc::geteuid() };
             self.confirm = Some(Confirm::Perf {

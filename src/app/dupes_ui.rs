@@ -146,7 +146,7 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                for (gi, g) in self.dupes.iter_mut().enumerate() {
+                for g in self.dupes.iter_mut() {
                     let head = format!(
                         "{} × {}  ·  {} wasted",
                         g.files.len(),
@@ -154,7 +154,7 @@ impl App {
                         human(g.size * (g.files.len() as u64 - 1))
                     );
                     egui::CollapsingHeader::new(RichText::new(head).strong())
-                        .id_salt(("dupe", gi))
+                        .id_salt(("dupe", g.files.first().map(|f| &f.path)))
                         .show(ui, |ui| {
                             for f in &mut g.files {
                                 ui.horizontal(|ui| {
