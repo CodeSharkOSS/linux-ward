@@ -69,7 +69,7 @@ impl App {
             if !self.svc_detail.contains_key(&svc.unit) {
                 self.load_svc_detail(svc.clone());
             }
-            let detail: Option<Detail> = self.svc_detail.get(&svc.unit).cloned();
+            let detail: Option<std::sync::Arc<Detail>> = self.svc_detail.get(&svc.unit).cloned();
             let idle = self.busy.is_none();
             let protected =
                 self.svc_scope == Scope::System && crate::perf::service_protected(&svc.unit);

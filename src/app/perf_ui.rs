@@ -37,6 +37,8 @@ impl App {
 
     pub(super) fn start_perf_action(&mut self, title: String, actions: Vec<Action>) {
         self.busy = Some(format!("{title}…"));
+        // The reboot reminder only makes sense for system tuning, not for deleting build folders.
+        let reboot_hint = self.tab == Tab::Performance;
         let n = self.notifier();
         std::thread::spawn(move || {
             let targets: Vec<Target> = actions
@@ -53,7 +55,11 @@ impl App {
                 .collect();
             // Root commands from all actions are batched into a single password prompt.
             targets::execute(&targets, &mut |l| n.send(Msg::Log(l)));
-            n.send(Msg::Log("Done. Some changes (kernel, tuned, fstab, guest tools) take full effect after a reboot.".into()));
+            n.send(Msg::Log(if reboot_hint {
+                "Done. Some changes (kernel, tuned, fstab, guest tools) take full effect after a reboot.".into()
+            } else {
+                "Done.".into()
+            }));
             n.send(Msg::Done { refresh: true });
             n.send(Msg::ReloadPerf);
         });

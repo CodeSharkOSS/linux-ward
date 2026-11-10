@@ -339,9 +339,101 @@ fn scan_contents_of(path: &Path, size: u64) -> Option<(usize, &'static str)> {
         .find_map(|(i, l)| line_secret(l).map(|w| (i + 1, w)))
 }
 
+/// Judge one file by its name, location, permissions and (optionally) contents.
+fn check_file(path: &Path, name: &str, mode: u32, size: u64, opts: Options) -> Option<Finding> {
+    let mut hit: Option<(Severity, String, String)> = by_name(path, name, mode);
+
+    // A key file by name or extension: confirm and flag unencrypted ones.
+    if let Some((_, kind, _)) = &hit
+        && (kind.contains("private key") || kind.contains("Key or certificate"))
+        && let Some(head) = read_head(path, 4096)
+    {
+        let text = String::from_utf8_lossy(&head);
+        let textual = !head.contains(&0);
+        let pemish = path_ext_is(path, &["pem", "key", "crt", "cer"]);
+        if textual && pemish && kind.contains("Key or certificate") && !text.contains("PRIVATE KEY")
+        {
+            hit = None; // a public certificate or licence text, not a secret
+        } else if text.contains("PRIVATE KEY")
+            && !text.contains("ENCRYPTED")
+            && !text.contains("BEGIN OPENSSH")
+        {
+            hit = hit.map(|(s, k, d)| {
+                (
+                    s.min(Severity::Medium),
+                    k,
+                    format!("{d}. Not protected by a passphrase"),
+                )
+            });
+        }
+    }
+
+    if hit.is_none() && opts.scan_contents {
+        let ext = path
+            .extension()
+            .and_then(|x| x.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let git_cfg = name == "config" && path.parent().is_some_and(|p| p.ends_with(".git"));
+        if (TEXT_EXT.contains(&ext.as_str()) || ext.is_empty() || git_cfg)
+            && !is_example(name)
+            && let Some((line, what)) = scan_contents_of(path, size)
+        {
+            let sev = if mode & 0o004 != 0 {
+                Severity::High
+            } else {
+                Severity::Medium
+            };
+            hit = Some((
+                sev,
+                what.into(),
+                format!("Found at line {line}; contents not shown"),
+            ));
+        }
+    }
+
+    if hit.is_none() && mode & 0o002 != 0 {
+        hit = Some((
+            Severity::Low,
+            "World-writable file".into(),
+            "Anyone on this machine can modify it".into(),
+        ));
+    }
+    let (severity, kind, detail) = hit?;
+    Some(Finding {
+        path: path.to_path_buf(),
+        severity,
+        kind,
+        detail,
+        mode,
+        fixable: mode & 0o077 != 0 && severity != Severity::Low || mode & 0o002 != 0,
+    })
+}
+
+/// Split `items` over up to 8 threads and gather what `f` returns for each.
+fn par_collect<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> Option<R> + Sync) -> Vec<R> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8);
+    let chunk = items.len().div_ceil(threads).max(1);
+    std::thread::scope(|sc| {
+        let f = &f;
+        let handles: Vec<_> = items
+            .chunks(chunk)
+            .map(|part| sc.spawn(move || part.iter().filter_map(f).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    })
+}
+
 pub fn scan(root: &Path, opts: Options) -> (Vec<Finding>, usize) {
     let mut findings = Vec::new();
-    let mut scanned = 0;
+    // Walking is cheap; reading file contents is not. Collect first, then inspect in parallel.
+    let mut files: Vec<(PathBuf, String, u32, u64)> = Vec::new();
     for e in walkdir::WalkDir::new(root)
         .follow_links(false)
         .same_file_system(true)
@@ -373,91 +465,21 @@ pub fn scan(root: &Path, opts: Options) -> (Vec<Finding>, usize) {
                     fixable: true,
                 });
             }
-            continue;
-        }
-        if !e.file_type().is_file() {
-            continue;
-        }
-        scanned += 1;
-        let size = meta.len();
-        let mut hit: Option<(Severity, String, String)> = by_name(e.path(), &name, mode);
-
-        // A key file by name or extension: confirm and flag unencrypted ones.
-        if let Some((_, kind, _)) = &hit
-            && (kind.contains("private key") || kind.contains("Key or certificate"))
-            && let Some(head) = read_head(e.path(), 4096)
-        {
-            let text = String::from_utf8_lossy(&head);
-            let textual = !head.contains(&0);
-            let pemish = path_ext_is(e.path(), &["pem", "key", "crt", "cer"]);
-            if textual
-                && pemish
-                && kind.contains("Key or certificate")
-                && !text.contains("PRIVATE KEY")
-            {
-                hit = None; // a public certificate or licence text, not a secret
-            } else if text.contains("PRIVATE KEY")
-                && !text.contains("ENCRYPTED")
-                && !text.contains("BEGIN OPENSSH")
-            {
-                hit = hit.map(|(s, k, d)| {
-                    (
-                        s.min(Severity::Medium),
-                        k,
-                        format!("{d}. Not protected by a passphrase"),
-                    )
-                });
-            }
-        }
-
-        if hit.is_none() && opts.scan_contents {
-            let ext = e
-                .path()
-                .extension()
-                .and_then(|x| x.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            let git_cfg =
-                name == "config" && e.path().parent().is_some_and(|p| p.ends_with(".git"));
-            if (TEXT_EXT.contains(&ext.as_str()) || ext.is_empty() || git_cfg)
-                && !is_example(&name)
-                && let Some((line, what)) = scan_contents_of(e.path(), size)
-            {
-                let sev = if mode & 0o004 != 0 {
-                    Severity::High
-                } else {
-                    Severity::Medium
-                };
-                hit = Some((
-                    sev,
-                    what.into(),
-                    format!("Found at line {line}; contents not shown"),
-                ));
-            }
-        }
-
-        if hit.is_none() && mode & 0o002 != 0 {
-            hit = Some((
-                Severity::Low,
-                "World-writable file".into(),
-                "Anyone on this machine can modify it".into(),
-            ));
-        }
-        if let Some((severity, kind, detail)) = hit {
-            findings.push(Finding {
-                path: e.path().to_path_buf(),
-                severity,
-                kind,
-                detail,
-                mode,
-                fixable: mode & 0o077 != 0 && severity != Severity::Low || mode & 0o002 != 0,
-            });
+        } else if e.file_type().is_file() {
+            files.push((e.into_path(), name, mode, meta.len()));
         }
     }
+    let scanned = files.len();
+    findings.extend(par_collect(&files, |(path, name, mode, size)| {
+        check_file(path, name, *mode, *size, opts)
+    }));
     if opts.scan_git {
-        for repo in crate::devclean::repos_under(root) {
-            findings.extend(scan_git_repo(&repo));
-        }
+        let repos = crate::devclean::repos_under(root);
+        findings.extend(
+            par_collect(&repos, |r| Some(scan_git_repo(r)))
+                .into_iter()
+                .flatten(),
+        );
     }
     findings.sort_by(|a, b| {
         a.severity

@@ -266,8 +266,14 @@ pub fn toolchains() -> Vec<Toolchain> {
         });
     }
 
-    out.extend(ide_leftovers());
-    out.extend(android_sdk());
+    // The IDE and Android scans measure many large folders: do them alongside the rest.
+    let (ide, android) = std::thread::scope(|sc| {
+        let a = sc.spawn(ide_leftovers);
+        let b = sc.spawn(android_sdk);
+        (a.join().unwrap_or_default(), b.join().unwrap_or_default())
+    });
+    out.extend(ide);
+    out.extend(android);
 
     // rustup
     if crate::util::which("rustup") {
@@ -519,6 +525,21 @@ fn git(repo: &Path, args: &[&str]) -> crate::util::CmdOut {
     ];
     a.extend_from_slice(args);
     run("git", &a)
+}
+
+/// Inspect many repositories at once: each takes several `git` calls and a size walk.
+pub fn inspect_repos(paths: &[PathBuf]) -> Vec<Repo> {
+    std::thread::scope(|sc| {
+        let chunk = paths.len().div_ceil(8).max(1);
+        let handles: Vec<_> = paths
+            .chunks(chunk)
+            .map(|part| sc.spawn(move || part.iter().map(|p| inspect_repo(p)).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    })
 }
 
 pub fn inspect_repo(path: &Path) -> Repo {

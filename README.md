@@ -4,7 +4,16 @@ A small Linux desktop app, written in Rust with [egui/eframe](https://github.com
 
 ## Features
 
-**Cleanup tab**
+The tabs are grouped into four sections along the top:
+
+| Section | Tabs |
+|---|---|
+| 💾 Free space | Quick clean · Large files · Duplicates |
+| 📦 Software | Packages · Services |
+| 🛠 Developer | Dev cleanup · Open ports · Java |
+| 🩺 Health & security | Health & speed · Security |
+
+**Quick clean**
 - Disk usage bars for every real mounted filesystem.
 - Scans for reclaimable space and shows the size of each item:
   - Application cache (`~/.cache`) and Trash
@@ -15,7 +24,7 @@ A small Linux desktop app, written in Rust with [egui/eframe](https://github.com
   - Developer caches: Cargo registry, npm, Go, Gradle, Maven, pnpm, Conda, NuGet, Bundler, Android, unused Docker/Podman images, containers and build cache (volumes are never removed)
 - Everything that needs root is batched into **one** password prompt via `pkexec`.
 
-**Packages tab**
+**Packages**
 - All installed packages with version, installed size and whether you installed them or they came in as a dependency.
 - An **Upgradable** view shows packages with a newer version in your repos (`1.0 → 2.0`); select some and choose **Upgrade selected…** (one password prompt). apt also refreshes its index first. pacman has no partial upgrades, so there the button upgrades the whole system (`-Syu`). Availability comes from already-downloaded metadata, so refresh your package index to see the latest.
 - A **Conflicts** view lists installed packages that declare a conflict with another installed package (shown next to the name). Healthy systems normally show none; version-limited conflicts are not checked.
@@ -23,39 +32,39 @@ A small Linux desktop app, written in Rust with [egui/eframe](https://github.com
 - Before removing, runs a dry run and shows any **other packages that would also be removed**.
 - Essential packages (libc, systemd, sudo, the package manager itself, the running kernel, etc.) can't be selected, and a removal that would cascade into one is blocked.
 
-**Duplicates tab**
+**Duplicates**
 - Finds identical files under a folder (matched by size, then hash, then a byte-for-byte check; hard links are ignored). Keep one copy per set and move the rest to Trash. It refuses to select every copy of a file.
 
-**Security tab**
+**Security**
 - Scans a folder (your home by default) for files that commonly hold secrets: SSH and TLS private keys, `.env` files, cloud/registry/Kubernetes/Docker credentials, stored git and database logins, wallets, and shell history. Optionally looks inside small text files for private-key blocks, AWS/GitHub/GitLab/Slack/Stripe/Google tokens and passwords embedded in URLs.
 - With **Check git repos** on, also finds secret files committed to git and secrets added in the last 300 commits (deleting a line doesn't remove it from history).
 - Ranks findings by risk (keys readable by other users rank highest) and flags unencrypted private keys, `~/.ssh` / `~/.gnupg` that aren't private, and world-writable files.
 - Secret values are never displayed or stored. **Restrict** runs `chmod` to 600/700; you can also move files to Trash. Findings are leads to review, not proof of a leak.
 
-**Projects tab** (for developers)
+**Dev cleanup**
 - **Build artifacts:** scans a code folder for regenerable output (Rust/Maven `target/`, `node_modules/`, Gradle/CMake `build/`, Python virtualenvs and caches, Composer `vendor/`, .NET `bin/`/`obj/`) and shows size and days idle. "Select untouched for over N days" picks the stale ones. Each folder is only listed when a marker file proves it is generated, so an unrelated folder called `target` is never touched.
 - **Language toolchains:** old versions from rustup, nvm, SDKMAN and pyenv; the one in use is protected.
 - **IDE leftovers:** every JetBrains IDE and Android Studio upgrade leaves the previous version's settings, plugins and caches behind (`~/.config`, `~/.cache`, `~/.local/share`). Each product's newest version is kept; older ones are listed together with their size. JetBrains Toolbox's own app folder is left alone because Toolbox manages it.
 - **Android SDK:** older platforms, build-tools and NDKs (newest kept), system images (protected while a virtual device uses them) and emulator devices (the `.avd` folder and its `.ini`). Found via `ANDROID_HOME`, `ANDROID_SDK_ROOT` or `~/Android/Sdk`.
 - **Git repositories:** compact with `git gc` and delete merged branches (`git branch -d`, which refuses unmerged ones).
 
-**Ports tab**
+**Open ports**
 - Lists TCP ports something is listening on, which process owns them, and whether they're reachable from the network or only locally. Stop your own leftover dev servers with one click (SIGTERM, after a confirmation).
 
-**Performance tab**
+**Health & speed**
 - Live CPU, memory and I/O pressure, boot-time analysis, and recommendations with one-click fixes.
 - Startup items: system services and autostart apps you can switch off.
 - Installed kernels (remove old ones), and config files left over from package upgrades.
 - Health checks: package integrity, failed services, firewall status and pending security updates.
 
-**Services tab**
+**Services**
 - Every running systemd service (system or your session) with a plain-language description, memory use and boot state.
 - Select one for details, its configuration files (click to open) and Restart / Stop / Disable, each behind a confirmation. Essential services are protected.
 
-**Java tab**
+**Java**
 - Installed runtimes, running JVMs (including those embedded in IDEs), heap and GC analysis, and suggested fixes.
 
-**Large files tab**
+**Large files**
 - Find files above a size threshold under any folder; move them to Trash or delete permanently. Hidden folders are skipped by default.
 
 Supported package managers: **apt** (Debian/Ubuntu/Mint/Pop!_OS), **dnf** (Fedora/RHEL), **pacman** (Arch/Manjaro/EndeavourOS), **zypper** (openSUSE).
@@ -107,11 +116,16 @@ cargo test -- --ignored --nocapture   # also queries your real package manager (
 
 | File | What it does |
 |---|---|
-| `src/main.rs` | Window setup and the `--scan` mode |
-| `src/app.rs` | The GUI: tabs, tables, confirmation dialogs, activity log. Slow work runs on threads and reports back over a channel so the UI never freezes |
+| `src/main.rs` | Window setup and the command-line modes (`--scan`, `--clean`) |
+| `src/app.rs` | Application state, the message channel from background threads, the activity log |
+| `src/app/nav.rs` | The grouped tab bar |
+| `src/app/*_ui.rs` | One file per tab (cleanup, packages, large files, duplicates, security, dev, services, perf, java) plus the confirmation dialog |
 | `src/targets.rs` | Each cleanup target: how to measure it and how to clean it |
-| `src/pkg.rs` | apt / dnf / pacman / zypper: list, orphans, dry-run, remove; protected-package list |
-| `src/util.rs` | Disk usage, size formatting, command running, `pkexec` batching with shell quoting |
+| `src/pkg.rs` | apt / dnf / pacman / zypper: list, orphans, conflicts, dry-run, remove; protected-package list |
+| `src/devclean.rs` | Build artifacts, toolchains, IDE and Android leftovers, git housekeeping |
+| `src/secscan.rs`, `src/dupes.rs`, `src/ports.rs` | Secret scan, duplicate finder, listening-port list |
+| `src/perf.rs`, `src/java.rs`, `src/services.rs` | Performance diagnostics, JVM analysis, systemd services |
+| `src/util.rs` | Disk usage, size formatting, command running, `pkexec` batching, exclusions, action log |
 
 ## Adding a cleanup target
 

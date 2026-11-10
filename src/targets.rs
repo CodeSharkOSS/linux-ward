@@ -101,14 +101,15 @@ pub fn scan_all(pm: Option<Pm>, pkg_sizes: &HashMap<String, u64>) -> Vec<Target>
 
 fn user_cache() -> Option<Target> {
     let dir = util::xdg_cache();
+    let (size, details) = usage_with_top_children(&dir, 12);
     Some(Target {
         name: "Application cache".into(),
         description: format!(
             "Everything in {}. Apps rebuild it as needed; close browsers and other apps first.",
             dir.display()
         ),
-        size: Some(dir_usage(&dir)),
-        details: top_children(&dir, 12),
+        size: Some(size),
+        details,
         action: Action::ClearDirs(vec![dir]),
         selected: false,
         group: Group::User,
@@ -501,14 +502,17 @@ fn gradle_cache() -> Option<Target> {
 
 fn maven_cache() -> Option<Target> {
     let dir = home().join(".m2/repository");
-    dir.is_dir().then(|| Target {
+    dir.is_dir().then(|| {
+    let (size, details) = usage_with_top_children(&dir, 12);
+    Target {
         name: "Maven repository".into(),
         description: "Downloaded artifacts in ~/.m2/repository. Re-downloaded on the next build; locally installed (mvn install) artifacts are lost too.".into(),
-        size: Some(dir_usage(&dir)),
-        details: top_children(&dir, 12),
+        size: Some(size),
+        details,
         action: Action::ClearDirs(vec![dir]),
         selected: false,
         group: Group::Developer,
+    }
     })
 }
 
@@ -601,25 +605,49 @@ fn container_cache(tool: &str) -> Option<Target> {
     })
 }
 
-/// Largest immediate children of a directory, for the details list.
-fn top_children(dir: &std::path::Path, n: usize) -> Vec<String> {
-    let mut v: Vec<(u64, String)> = std::fs::read_dir(dir)
+/// Total size of a directory plus its largest immediate children, from a single pass.
+/// Children are measured in parallel: this is a big, I/O-bound walk (e.g. ~/.cache).
+fn usage_with_top_children(dir: &std::path::Path, n: usize) -> (u64, Vec<String>) {
+    use std::os::unix::fs::MetadataExt;
+    let mut loose = 0;
+    let mut subdirs = Vec::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        match e.file_type() {
+            Ok(t) if t.is_dir() => subdirs.push(e),
+            _ => loose += e.metadata().map(|m| m.blocks() * 512).unwrap_or(0),
+        }
+    }
+    let mut sized: Vec<(u64, String)> = std::thread::scope(|sc| {
+        let chunk = subdirs.len().div_ceil(8).max(1);
+        let handles: Vec<_> = subdirs
+            .chunks(chunk)
+            .map(|part| {
+                sc.spawn(move || {
+                    part.iter()
+                        .map(|e| {
+                            (
+                                dir_usage(&e.path()),
+                                e.file_name().to_string_lossy().into_owned(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    });
+    let total = loose + sized.iter().map(|s| s.0).sum::<u64>();
+    sized.retain(|(sz, _)| *sz > 0);
+    sized.sort_by_key(|e| std::cmp::Reverse(e.0));
+    let top = sized
         .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| {
-            (
-                dir_usage(&e.path()),
-                e.file_name().to_string_lossy().into_owned(),
-            )
-        })
-        .filter(|(sz, _)| *sz > 0)
-        .collect();
-    v.sort_by_key(|e| std::cmp::Reverse(e.0));
-    v.into_iter()
         .take(n)
         .map(|(sz, name)| format!("{name}  ({})", human(sz)))
-        .collect()
+        .collect();
+    (total, top)
 }
 
 /// Execute the given targets. User-level work runs first, then all root

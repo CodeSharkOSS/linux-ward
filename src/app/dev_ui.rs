@@ -57,13 +57,17 @@ impl App {
         let root = PathBuf::from(self.dev_root.trim());
         let n = self.notifier();
         std::thread::spawn(move || {
-            n.send(Msg::DevArtifacts(devclean::scan_artifacts(&root)));
-            n.send(Msg::DevToolchains(devclean::toolchains()));
-            let repos: Vec<Repo> = devclean::repos_under(&root)
-                .iter()
-                .map(|p| devclean::inspect_repo(p))
-                .collect();
-            n.send(Msg::DevRepos(repos));
+            // Three independent scans: each result appears as soon as it is ready.
+            let (n, root) = (&n, &root);
+            std::thread::scope(|sc| {
+                sc.spawn(move || n.send(Msg::DevArtifacts(devclean::scan_artifacts(root))));
+                sc.spawn(move || n.send(Msg::DevToolchains(devclean::toolchains())));
+                sc.spawn(move || {
+                    let found = devclean::repos_under(root);
+                    n.send(Msg::DevRepos(devclean::inspect_repos(&found)));
+                });
+            });
+            n.send(Msg::DevDone);
         });
     }
 

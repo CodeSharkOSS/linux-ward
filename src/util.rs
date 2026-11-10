@@ -106,17 +106,26 @@ pub fn excluded(path: &Path) -> bool {
     list.iter().any(|p| path.starts_with(p))
 }
 
-/// Append a line to `~/.local/state/diskclean/actions.log` (best effort).
+/// Append a line to `~/.local/state/diskclean/actions.log` (best effort). The file is opened once.
 pub fn log_action(line: &str) {
-    let dir = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".local/state"))
-        .join("diskclean");
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("actions.log"))
+    use std::sync::{Mutex, OnceLock};
+    static FILE: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
+    let file = FILE.get_or_init(|| {
+        let dir = std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join(".local/state"))
+            .join("diskclean");
+        let _ = std::fs::create_dir_all(&dir);
+        Mutex::new(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("actions.log"))
+                .ok(),
+        )
+    });
+    if let Ok(mut guard) = file.lock()
+        && let Some(f) = guard.as_mut()
     {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

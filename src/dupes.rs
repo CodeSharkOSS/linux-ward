@@ -72,10 +72,52 @@ fn same_bytes(a: &Path, b: &Path) -> bool {
     }
 }
 
+type Candidate = (PathBuf, u64, Option<SystemTime>);
+
+/// Hash, then byte-compare, the files that share one size. Returns the confirmed duplicate sets.
+fn confirm_group(size: u64, files: Vec<Candidate>) -> Vec<DupGroup> {
+    let mut groups = Vec::new();
+    let mut by_head: HashMap<u64, Vec<_>> = HashMap::new();
+    for f in files {
+        if let Some(h) = hash_file(&f.0, Some(64 * 1024)) {
+            by_head.entry(h).or_default().push(f);
+        }
+    }
+    for same_head in by_head.into_values().filter(|v| v.len() > 1) {
+        let mut by_full: HashMap<u64, Vec<_>> = HashMap::new();
+        for f in same_head {
+            if let Some(h) = hash_file(&f.0, None) {
+                by_full.entry(h).or_default().push(f);
+            }
+        }
+        for same_hash in by_full.into_values().filter(|v| v.len() > 1) {
+            // Confirm against real bytes; a hash match alone is never enough to delete on.
+            let mut clusters: Vec<Vec<(PathBuf, u64, Option<SystemTime>)>> = Vec::new();
+            for f in same_hash {
+                match clusters.iter_mut().find(|c| same_bytes(&c[0].0, &f.0)) {
+                    Some(c) => c.push(f),
+                    None => clusters.push(vec![f]),
+                }
+            }
+            for mut c in clusters.into_iter().filter(|c| c.len() > 1) {
+                c.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
+                groups.push(DupGroup {
+                    size,
+                    files: c
+                        .into_iter()
+                        .map(|(path, _, modified)| DupFile { path, modified })
+                        .collect(),
+                });
+            }
+        }
+    }
+    groups
+}
+
 /// Returns the groups (largest waste first) and the number of files looked at.
 pub fn scan(root: &Path, min_size: u64, include_hidden: bool) -> (Vec<DupGroup>, usize) {
     let mut scanned = 0;
-    let mut by_size: HashMap<u64, Vec<(PathBuf, u64, Option<SystemTime>)>> = HashMap::new();
+    let mut by_size: HashMap<u64, Vec<Candidate>> = HashMap::new();
     let mut seen_inodes = std::collections::HashSet::new();
     for e in walkdir::WalkDir::new(root)
         .follow_links(false)
@@ -104,43 +146,36 @@ pub fn scan(root: &Path, min_size: u64, include_hidden: bool) -> (Vec<DupGroup>,
             .push((e.into_path(), m.len(), m.modified().ok()));
     }
 
-    let mut groups = Vec::new();
-    for (size, files) in by_size.into_iter().filter(|(_, v)| v.len() > 1) {
-        let mut by_head: HashMap<u64, Vec<_>> = HashMap::new();
-        for f in files {
-            if let Some(h) = hash_file(&f.0, Some(64 * 1024)) {
-                by_head.entry(h).or_default().push(f);
-            }
-        }
-        for same_head in by_head.into_values().filter(|v| v.len() > 1) {
-            let mut by_full: HashMap<u64, Vec<_>> = HashMap::new();
-            for f in same_head {
-                if let Some(h) = hash_file(&f.0, None) {
-                    by_full.entry(h).or_default().push(f);
-                }
-            }
-            for same_hash in by_full.into_values().filter(|v| v.len() > 1) {
-                // Confirm against real bytes; a hash match alone is never enough to delete on.
-                let mut clusters: Vec<Vec<(PathBuf, u64, Option<SystemTime>)>> = Vec::new();
-                for f in same_hash {
-                    match clusters.iter_mut().find(|c| same_bytes(&c[0].0, &f.0)) {
-                        Some(c) => c.push(f),
-                        None => clusters.push(vec![f]),
-                    }
-                }
-                for mut c in clusters.into_iter().filter(|c| c.len() > 1) {
-                    c.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
-                    groups.push(DupGroup {
-                        size,
-                        files: c
-                            .into_iter()
-                            .map(|(path, _, modified)| DupFile { path, modified })
-                            .collect(),
-                    });
-                }
-            }
-        }
+    // Hashing is disk- and CPU-bound and every size group is independent: spread them over threads.
+    let candidates: Vec<(u64, Vec<Candidate>)> =
+        by_size.into_iter().filter(|(_, v)| v.len() > 1).collect();
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8);
+    let mut lanes: Vec<Vec<(u64, Vec<Candidate>)>> = (0..threads).map(|_| Vec::new()).collect();
+    // Deal the biggest groups out first so the lanes finish at about the same time.
+    let mut candidates = candidates;
+    candidates.sort_by_key(|(size, v)| std::cmp::Reverse(size * v.len() as u64));
+    for (i, c) in candidates.into_iter().enumerate() {
+        lanes[i % threads].push(c);
     }
+    let mut groups: Vec<DupGroup> = std::thread::scope(|sc| {
+        let handles: Vec<_> = lanes
+            .into_iter()
+            .map(|lane| {
+                sc.spawn(move || {
+                    lane.into_iter()
+                        .flat_map(|(size, files)| confirm_group(size, files))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    });
     groups.sort_by_key(|g| std::cmp::Reverse(g.wasted()));
     (groups, scanned)
 }
