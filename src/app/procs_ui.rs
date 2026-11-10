@@ -87,7 +87,7 @@ impl App {
                 return;
             }
             ui.label(RichText::new("ClamAV recognises known viruses and malware by signature. This complements the behaviour checks below: it can't spot brand-new threats, but it will catch common ones.").weak().size(12.0));
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let idle = !self.clam_scanning && self.busy.is_none();
                 if ui.add_enabled(idle, egui::Button::new("Scan running programs")).on_hover_text("Scans the program file behind every process that is running now").clicked() {
                     // From the last process scan: it covers every user's programs after an administrator scan.
@@ -122,7 +122,7 @@ impl App {
                 } else {
                     ui.colored_label(Color32::from_rgb(230, 90, 80), format!("⚠ {} threat(s) found in {}", r.infected.len(), r.target));
                     for (path, sig) in &r.infected {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new(sig).color(Color32::from_rgb(230, 90, 80)).strong());
                             ui.label(RichText::new(path).monospace().size(12.0));
                             if ui.small_button("Open").clicked()
@@ -195,7 +195,7 @@ impl App {
                 .size(12.0),
         );
         if self.procs_opaque > 0 {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("ℹ {} processes belong to other users and can't be fully inspected without administrator rights.", self.procs_opaque)).weak().size(12.0));
                 if !self.procs_scanning && ui.small_button("🔒 Scan all processes…").on_hover_text("Asks for your password once and runs this scan as administrator. Read-only: nothing is changed.").clicked() {
                     elevate = true;
