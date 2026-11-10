@@ -95,18 +95,28 @@ impl Tab {
 }
 
 impl App {
+    /// Two clearly different levels: sections are large filled pills; the tabs inside the current
+    /// section sit on a tinted strip below, in smaller text, with an underline marking the active one.
     pub(super) fn top_bar(&mut self, ui: &mut egui::Ui) {
+        let accent = ui.visuals().selection.bg_fill;
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.heading("🧹 Disk Cleaner");
-            ui.separator();
+            ui.add_space(14.0);
             let current = self.tab.section();
             for s in Section::ALL {
-                if ui
-                    .selectable_label(current == s, RichText::new(s.label()).strong())
-                    .clicked()
-                    && current != s
-                {
+                let active = current == s;
+                let text = RichText::new(s.label()).size(15.0).strong();
+                let text = if active {
+                    text.color(ui.visuals().selection.stroke.color)
+                } else {
+                    text
+                };
+                let button = egui::Button::new(text)
+                    .fill(if active { accent } else { Color32::TRANSPARENT })
+                    .min_size(egui::vec2(0.0, 30.0))
+                    .corner_radius(15.0);
+                if ui.add(button).clicked() && !active {
                     // Go to the tab last used in that section, or its first.
                     self.tab = self
                         .last_tab
@@ -124,22 +134,57 @@ impl App {
                 }
             });
         });
-        ui.horizontal(|ui| {
-            let section = self.tab.section();
-            for &t in section.tabs() {
-                let enabled = t != Tab::Packages || self.pm.is_some();
-                let hint = if enabled {
-                    t.hint()
-                } else {
-                    "No supported package manager was found"
-                };
-                ui.add_enabled_ui(enabled, |ui| {
-                    ui.selectable_value(&mut self.tab, t, t.label())
-                        .on_hover_text(hint);
+        ui.add_space(4.0);
+
+        // Sub-tabs: a full-width tinted strip so it reads as belonging to the section above.
+        let strip = ui.visuals().faint_bg_color.gamma_multiply(1.6);
+        egui::Frame::new()
+            .fill(strip)
+            .inner_margin(egui::Margin::symmetric(14, 4))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let section = self.tab.section();
+                    ui.label(
+                        RichText::new(format!(
+                            "{} ›",
+                            section.label().split_once(' ').map_or("", |p| p.1)
+                        ))
+                        .weak()
+                        .small(),
+                    );
+                    ui.add_space(4.0);
+                    for &t in section.tabs() {
+                        let enabled = t != Tab::Packages || self.pm.is_some();
+                        let hint = if enabled {
+                            t.hint()
+                        } else {
+                            "No supported package manager was found"
+                        };
+                        let active = self.tab == t;
+                        let text = RichText::new(t.label()).size(13.0);
+                        let text = if active {
+                            text.strong().color(ui.visuals().hyperlink_color)
+                        } else {
+                            text
+                        };
+                        let resp = ui
+                            .add_enabled(enabled, egui::Button::new(text).frame(false))
+                            .on_hover_text(hint);
+                        if active {
+                            let r = resp.rect;
+                            ui.painter().hline(
+                                r.x_range(),
+                                r.bottom() + 1.0,
+                                egui::Stroke::new(2.0, ui.visuals().hyperlink_color),
+                            );
+                        }
+                        if resp.clicked() {
+                            self.tab = t;
+                        }
+                    }
+                    self.last_tab.insert(section.label(), self.tab);
                 });
-            }
-            self.last_tab.insert(section.label(), self.tab);
-        });
-        ui.add_space(2.0);
+            });
     }
 }
