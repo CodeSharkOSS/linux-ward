@@ -448,7 +448,7 @@ impl App {
                             }
                         });
                         if let Some(d) = self.diffs.get(&l.path) {
-                            egui::ScrollArea::vertical().id_salt(("diff", &l.path)).max_height(160.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt(("diff", &l.path)).max_height((ui.ctx().content_rect().height() * 0.3).max(160.0)).show(ui, |ui| {
                                 ui.label(RichText::new(d).monospace().size(11.0));
                             });
                         }
@@ -496,7 +496,7 @@ impl App {
                     ui.label(RichText::new(h.desc).weak().size(12.0));
                     if !h.output.trim().is_empty() {
                         egui::CollapsingHeader::new(if h.ok { "Output" } else { "Details" }).id_salt(h.title).default_open(!h.ok).show(ui, |ui| {
-                            egui::ScrollArea::vertical().id_salt(("health", h.title)).max_height(180.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt(("health", h.title)).max_height((ui.ctx().content_rect().height() * 0.3).max(180.0)).show(ui, |ui| {
                                 ui.label(RichText::new(&h.output).monospace().size(11.0));
                             });
                         });
@@ -540,7 +540,7 @@ impl App {
 fn pressure_bar(ui: &mut egui::Ui, p: &Pressure) {
     let now = p.some[0];
     let mut bar = egui::ProgressBar::new((now / 100.0).clamp(0.0, 1.0))
-        .desired_width(ui.available_width().min(420.0))
+        .desired_width(ui.available_width())
         .text(format!(
             "{:.1}% now · {:.1}% 1 min · {:.1}% 5 min stalled",
             p.some[0], p.some[1], p.some[2]

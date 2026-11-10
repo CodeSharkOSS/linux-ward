@@ -7,7 +7,8 @@ impl App {
         let Some(c) = self.confirm.take() else { return };
         let mut decision: Option<bool> = None;
         let resp = egui::Modal::new(egui::Id::unique("confirm")).backdrop_color(Color32::from_black_alpha(190)).show(ctx, |ui| {
-            ui.set_max_width(560.0);
+            // Dialogs get wider on a big window so long paths and command lines stay readable.
+                ui.set_max_width((ctx.content_rect().width() * 0.5).clamp(560.0, 900.0));
             match &c {
                 Confirm::Clean(idx) => {
                     ui.heading("Clean up?");

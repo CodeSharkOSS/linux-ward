@@ -78,7 +78,7 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Code folder");
-            ui.add(egui::TextEdit::singleline(&mut self.dev_root).desired_width(260.0));
+            ui.add(egui::TextEdit::singleline(&mut self.dev_root).desired_width(field_width(ui, 0.3, 220.0, 700.0)));
             if self.dev_scanning {
                 ui.spinner();
                 ui.label(RichText::new("scanning…").weak());

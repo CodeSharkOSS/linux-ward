@@ -31,7 +31,7 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Folder");
-            ui.add(egui::TextEdit::singleline(&mut self.sec_root).desired_width(260.0));
+            ui.add(egui::TextEdit::singleline(&mut self.sec_root).desired_width(field_width(ui, 0.3, 220.0, 700.0)));
             ui.checkbox(&mut self.sec_contents, "Look inside text files for keys and tokens")
                 .on_hover_text("Reads small config/text files and looks for private keys, cloud and API tokens, and passwords in URLs. Secret values are never shown or stored.");
             ui.checkbox(&mut self.sec_git, "Check git repos")

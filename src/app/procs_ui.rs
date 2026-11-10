@@ -101,7 +101,7 @@ impl App {
                 }
                 ui.separator();
                 ui.label("Folder");
-                ui.add(egui::TextEdit::singleline(&mut self.clam_dir).desired_width(260.0));
+                ui.add(egui::TextEdit::singleline(&mut self.clam_dir).desired_width(field_width(ui, 0.3, 220.0, 700.0)));
                 if ui.add_enabled(idle && !self.clam_dir.trim().is_empty(), egui::Button::new("Scan folder")).clicked() {
                     job = Some(ClamJob::Folder(self.clam_dir.trim().to_string()));
                 }

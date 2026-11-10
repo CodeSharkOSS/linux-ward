@@ -67,6 +67,11 @@ enum Msg {
     },
 }
 
+/// Width for a text field that should grow with the window: a share of the free width, within limits.
+pub(crate) fn field_width(ui: &egui::Ui, share: f32, min: f32, max: f32) -> f32 {
+    (ui.available_width() * share).clamp(min, max)
+}
+
 /// Run independent jobs side by side (or one after another when `parallel` is false).
 fn run_jobs<'a>(parallel: bool, jobs: Vec<Box<dyn FnOnce() + Send + 'a>>) {
     if parallel {

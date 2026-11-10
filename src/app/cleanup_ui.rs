@@ -69,7 +69,7 @@ impl App {
                             },
                         );
                         let mut bar = egui::ProgressBar::new(frac)
-                            .desired_width(ui.available_width().min(520.0))
+                            .desired_width(ui.available_width())
                             .text(format!(
                                 "{} used of {} · {} free",
                                 human(used),

@@ -56,7 +56,10 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Folder");
-            ui.add(egui::TextEdit::singleline(&mut self.dupes_root).desired_width(260.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.dupes_root)
+                    .desired_width(field_width(ui, 0.3, 220.0, 700.0)),
+            );
             ui.label("Larger than");
             ui.add(
                 egui::DragValue::new(&mut self.dupes_min_mb)

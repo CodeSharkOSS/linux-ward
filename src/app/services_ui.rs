@@ -182,7 +182,7 @@ impl App {
             ui.add(
                 egui::TextEdit::singleline(&mut self.svc_filter)
                     .hint_text("🔍 Filter services")
-                    .desired_width(200.0),
+                    .desired_width(field_width(ui, 0.2, 180.0, 400.0)),
             );
             let mut cats: Vec<&str> = self.svcs.iter().map(|s| s.category).collect();
             cats.sort_unstable();

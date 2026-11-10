@@ -69,7 +69,7 @@ impl App {
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("🔍 Filter packages").desired_width(220.0));
+            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("🔍 Filter packages").desired_width(field_width(ui, 0.25, 200.0, 420.0)));
             let has_manual = self.rows.iter().any(|r| r.pkg.manual.is_some());
             ui.add_enabled(has_manual, egui::Checkbox::new(&mut self.manual_only, "Installed by me only"))
                 .on_hover_text("Hide packages that were pulled in automatically as dependencies");
@@ -265,7 +265,8 @@ impl App {
             .resizable(true)
             .cell_layout(Layout::left_to_right(Align::Center))
             .column(Column::exact(26.0))
-            .column(Column::remainder().at_least(140.0).clip(true))
+            // Not resizable, or the table would keep this column's old width instead of growing it.
+            .column(Column::remainder().at_least(140.0).clip(true).resizable(false))
             .column(Column::initial(130.0).at_least(60.0).clip(true))
             .column(Column::initial(130.0).at_least(60.0).clip(true))
             .column(Column::initial(90.0).at_least(70.0))
