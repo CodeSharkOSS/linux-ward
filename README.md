@@ -150,3 +150,7 @@ then add it to the list in `scan_all`.
 - Package names are validated and every argument is shell-quoted before reaching the root shell.
 - `pacman -Rns` refuses to remove packages that something else depends on; apt/dnf/zypper may remove dependents, which is why the dry-run list is shown first.
 - "Move to Trash" doesn't free space until you empty the Trash (which the Cleanup tab can do).
+
+## License
+
+Disk Cleaner is licensed under the [Mozilla Public License 2.0](LICENSE).
