@@ -3,6 +3,7 @@
 
 use eframe::egui;
 
+mod aiconf;
 mod app;
 mod clam;
 mod devclean;

@@ -8,6 +8,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use eframe::egui::{self, Align, Color32, Layout, RichText};
 use egui_extras::{Column, TableBuilder};
 
+mod ai_ui;
 mod cleanup_ui;
 mod confirm_ui;
 mod dev_ui;
@@ -50,6 +51,7 @@ enum Msg {
     /// The administrator scan failed or was cancelled: later rescans shouldn't prompt again.
     ProcsNotElevated,
     Security(Vec<crate::secscan::Finding>, usize),
+    AiConfigs(Vec<crate::aiconf::AiFile>, usize),
     Perf(Box<perf::Snapshot>),
     Java(Box<java::JavaReport>),
     Services(Scope, Vec<services::Svc>),
@@ -210,6 +212,8 @@ pub struct App {
     sec_contents: bool,
     sec_git: bool,
 
+    ai: ai_ui::AiState,
+
     dev_root: String,
     dev_scanning: bool,
     dev_idle_days: u64,
@@ -315,6 +319,7 @@ impl App {
             sec_root: util::home().display().to_string(),
             sec_contents: true,
             sec_git: true,
+            ai: ai_ui::AiState::new(),
             dev_root: util::home().display().to_string(),
             dev_scanning: false,
             dev_idle_days: 90,
@@ -515,6 +520,11 @@ impl App {
                     self.sec_scanned = scanned;
                     self.sec_scanning = false;
                 }
+                Msg::AiConfigs(files, visited) => {
+                    self.ai.files = files;
+                    self.ai.visited = visited;
+                    self.ai.scanning = false;
+                }
                 Msg::DevArtifacts(a) => {
                     self.dev_art = a
                         .into_iter()
@@ -687,6 +697,9 @@ impl eframe::App for App {
         if self.tab == Tab::Services && self.svc_sel.is_some() {
             self.svc_detail_panel(ui);
         }
+        if self.tab == Tab::AiConfigs {
+            self.ai_editor_panel(ui);
+        }
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Cleanup => self.cleanup_tab(ui),
             Tab::Packages => self.packages_tab(ui),
@@ -700,6 +713,7 @@ impl eframe::App for App {
             Tab::Services => self.services_tab(ui),
             Tab::Java => self.java_tab(ui),
             Tab::Disks => self.disks_tab(ui),
+            Tab::AiConfigs => self.ai_tab(ui),
         });
         let ctx = ui.ctx().clone();
         self.confirm_dialog(&ctx);

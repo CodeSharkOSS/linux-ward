@@ -10,7 +10,7 @@ The tabs are grouped into four sections along the top:
 |---|---|
 | 💾 Free space | Quick clean · Large files · Duplicates |
 | 📦 Software | Packages · Services |
-| 🛠 Developer | Dev cleanup · Open ports · Java |
+| 🛠 Developer | Dev cleanup · Open ports · Java · AI configs |
 | 🩺 Health & security | Health & speed · Disks & filesystems · Security · Suspect processes |
 
 **Quick clean**
@@ -72,6 +72,11 @@ The tabs are grouped into four sections along the top:
   - `/etc/fstab`: create a missing mount folder, reload systemd, or add `nofail` to an entry whose device is missing (a backup is kept at `/etc/fstab.linuxward.bak`).
   - `btrfs check --repair` and `xfs_repair -L` are deliberately not offered: they can destroy filesystems that are otherwise recoverable.
 - Needs `smartmontools` for SMART; each filesystem tool is only used if installed.
+
+**AI configs**
+- Scans your home folder (or any folder) for AI assistant configuration: Claude Code (`CLAUDE.md`, `.claude/settings*.json`, commands, subagents, skills, `~/.claude.json`), `AGENTS.md`, Gemini CLI, Codex, Cursor rules, Copilot instructions, Continue, Aider, OpenCode, Windsurf, `.mcp.json` and Claude Desktop.
+- Click a file to edit it in the side panel. Every save first copies the previous version to `~/.local/state/linuxward/backups/`; permissions and symlinks are kept. Strict `.json` files show a warning when they stop parsing.
+- Files that can hold API keys or login tokens (🔒) stay hidden until you choose **Show and edit anyway**.
 
 **Services**
 - Every running systemd service (system or your session) with a plain-language description, memory use and boot state.

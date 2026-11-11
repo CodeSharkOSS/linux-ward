@@ -20,6 +20,7 @@ pub(super) enum Tab {
     Projects,
     Ports,
     Java,
+    AiConfigs,
     Performance,
     Disks,
     Security,
@@ -47,7 +48,7 @@ impl Section {
         match self {
             Section::FreeSpace => &[Tab::Cleanup, Tab::LargeFiles, Tab::Duplicates],
             Section::Software => &[Tab::Packages, Tab::Services],
-            Section::Developer => &[Tab::Projects, Tab::Ports, Tab::Java],
+            Section::Developer => &[Tab::Projects, Tab::Ports, Tab::Java, Tab::AiConfigs],
             Section::Health => &[Tab::Performance, Tab::Disks, Tab::Security, Tab::Processes],
         }
     }
@@ -71,6 +72,7 @@ impl Tab {
             Tab::Projects => "🏗",
             Tab::Ports => "🔌",
             Tab::Java => "☕",
+            Tab::AiConfigs => "🤖",
             Tab::Performance => "🚀",
             Tab::Disks => "💽",
             Tab::Security => "🔑",
@@ -88,6 +90,7 @@ impl Tab {
             Tab::Projects => "Dev cleanup",
             Tab::Ports => "Open ports",
             Tab::Java => "Java",
+            Tab::AiConfigs => "AI configs",
             Tab::Performance => "Health & speed",
             Tab::Disks => "Disks & filesystems",
             Tab::Security => "Security",
@@ -107,6 +110,9 @@ impl Tab {
             }
             Tab::Ports => "Programs listening for network connections",
             Tab::Java => "Installed JVMs, running Java processes and memory tuning",
+            Tab::AiConfigs => {
+                "Find and edit Claude, Codex, Gemini, Cursor and other AI assistant config files"
+            }
             Tab::Performance => {
                 "Boot time, startup items, kernels, tuning and system health checks"
             }
