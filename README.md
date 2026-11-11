@@ -82,7 +82,7 @@ diskclean --clean --dry-run  # list the safe, password-free cleanups it would ru
 diskclean --clean            # run them (e.g. from cron)
 ```
 
-- `~/.config/diskclean/exclude`: one folder per line (`~/` allowed, `#` comments). Every scan skips them.
+- `~/.config/diskclean/exclude`: one folder per line (`~/` allowed, `#` comments). Every scan skips them, and nothing inside them (or containing them) is ever deleted by a cleanup.
 - `~/.local/state/diskclean/actions.log`: a timestamped record of everything the app did.
 
 ## Build
@@ -143,6 +143,8 @@ Write a function in `src/targets.rs` that returns `Option<Target>` with a size a
 then add it to the list in `scan_all`.
 
 ## Safety notes
+
+- The **administrator process scan** runs this same program as root through `pkexec`. Install the app somewhere only root can write (for example `/usr/local/bin`) before relying on it; run from a build folder in your home, anything that can write there could swap the binary.
 
 - Every destructive action goes through a confirmation dialog.
 - Package names are validated and every argument is shell-quoted before reaching the root shell.
