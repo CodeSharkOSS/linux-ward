@@ -1,4 +1,4 @@
-//! ClamAV integration: scan files, folders or the programs that are running right now.
+//! `ClamAV` integration: scan files, folders or the programs that are running right now.
 //! Uses the daemon (`clamdscan`) when this user can reach it, otherwise `clamscan`.
 
 use crate::util::{run, which};
@@ -18,13 +18,13 @@ pub struct Outcome {
     pub tool: Option<Tool>,
     /// (path, signature name)
     pub infected: Vec<(String, String)>,
-    /// Lines worth showing from ClamAV's own summary.
+    /// Lines worth showing from `ClamAV`'s own summary.
     pub summary: Vec<String>,
     /// Set when the scan could not run or finished with an error.
     pub error: Option<String>,
 }
 
-/// The best tool this user can actually use, or None if ClamAV isn't installed.
+/// The best tool this user can actually use, or None if `ClamAV` isn't installed.
 pub fn tool() -> Option<Tool> {
     if which("clamdscan") && run("clamdscan", &["--ping", "1:1"]).ok {
         return Some(Tool::Daemon);
@@ -87,7 +87,7 @@ fn execute(tool: Tool, target: &str, input: &[&str]) -> Outcome {
     let all = format!("{}\n{}", out.stdout, out.stderr);
     // 0 = clean, 1 = threats found, anything else = the scan itself failed.
     let error = match out.code {
-        Some(0) | Some(1) => None,
+        Some(0 | 1) => None,
         // Unreadable files give exit code 2, but threats already found must still be shown.
         _ if !infected.is_empty() => None,
         _ => {
@@ -139,8 +139,7 @@ fn write_private_temp(text: &str) -> std::io::Result<std::path::PathBuf> {
     use std::os::unix::fs::OpenOptionsExt;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.subsec_nanos());
     for attempt in 0..20 {
         let path = std::env::temp_dir().join(format!(
             "linuxward-clam-{}-{nanos}-{attempt}.txt",
@@ -156,7 +155,7 @@ fn write_private_temp(text: &str) -> std::io::Result<std::path::PathBuf> {
                 f.write_all(text.as_bytes())?;
                 return Ok(path);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e),
         }
     }

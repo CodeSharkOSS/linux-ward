@@ -24,7 +24,7 @@ pub struct Jvm {
     pub vendor: String,
     pub is_jdk: bool,
     pub is_default: bool,
-    /// Shipped inside another application (an IDE's JetBrains Runtime…): never touched.
+    /// Shipped inside another application (an IDE's `JetBrains` Runtime…): never touched.
     pub bundled: bool,
     /// Java 12+ ships a class-data-sharing archive that speeds up start-up; it can go missing after updates.
     pub cds_missing: bool,
@@ -201,8 +201,7 @@ pub fn label_for(cmd: &[String], comm: &str) -> String {
     {
         return Path::new(j)
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| j.clone());
+            .map_or_else(|| j.clone(), |n| n.to_string_lossy().into_owned());
     }
     let mut it = cmd.iter().skip(1);
     while let Some(a) = it.next() {
@@ -432,7 +431,11 @@ fn owning_packages(pm: Pm, home: &Path) -> Vec<String> {
 }
 
 fn set_default_cmds(pm: Pm, j: &Jvm) -> Vec<Vec<String>> {
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let s = |v: &[&str]| {
+        v.iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+    };
     if pm == Pm::Pacman {
         let name = j
             .home
@@ -546,8 +549,7 @@ fn analyse(
 ) -> JProc {
     let mine = std::fs::metadata(format!("/proc/{}", found.pid))
         // SAFETY: getuid has no preconditions.
-        .map(|m| m.uid() == unsafe { libc::getuid() })
-        .unwrap_or(false);
+        .is_ok_and(|m| m.uid() == unsafe { libc::getuid() });
     let exe = std::fs::read_link(format!("/proc/{}/exe", found.pid)).unwrap_or_default();
     let major = found
         .home
@@ -683,7 +685,7 @@ fn flag_sets(ram: u64, cpus: usize, major: u32) -> Vec<(String, String)> {
 
 pub fn scan(pm: Option<Pm>) -> JavaReport {
     let ram = meminfo_total();
-    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
     let default_home = which_path("java")
         .ok()
         .and_then(|p| std::fs::canonicalize(p).ok())
@@ -996,7 +998,7 @@ mod tests {
     #[test]
     fn heap_used_adds_up_generations_for_parallel_and_serial() {
         let g1 = "garbage-first heap   total reserved 2097152K, committed 1133568K, used 777237K [0x1, 0x2)";
-        assert_eq!(heap_used(g1), Some(777237 * 1024));
+        assert_eq!(heap_used(g1), Some(777_237 * 1024));
         let parallel = " PSYoungGen      total 76288K, used 10000K [0x1, 0x2)\n ParOldGen       total 175104K, used 20000K [0x3, 0x4)\n";
         assert_eq!(heap_used(parallel), Some(30000 * 1024));
         let serial = " def new generation   total 9216K, used 1000K [0x1)\n tenured generation   total 20480K, used 2000K [0x2)\n";
@@ -1009,7 +1011,7 @@ mod tests {
         assert_eq!(parse_xmx("-Xmx4g"), Some(4 * GIB));
         assert_eq!(parse_xmx("-Xms1g"), None);
         let h = "garbage-first heap   total reserved 2097152K, committed 1133568K, used 777237K [0x1, 0x2)\n region size 1024K";
-        assert_eq!(heap_used(h), Some(777237 * 1024));
+        assert_eq!(heap_used(h), Some(777_237 * 1024));
         let f = "-XX:InitialHeapSize=134217728 -XX:MaxHeapSize=2147483648 -XX:+UseG1GC";
         assert_eq!(flag_value(f, "MaxHeapSize"), Some(2 * GIB));
         assert_eq!(gc_name(f).as_deref(), Some("G1"));
@@ -1077,7 +1079,7 @@ mod live_java_tests {
     use super::*;
 
     #[test]
-    #[ignore]
+    #[ignore = "queries the live system; run with --ignored"]
     fn live_java_print() {
         let r = scan(Pm::detect());
         println!("RAM {} CPUs {}", human(r.ram), r.cpus);

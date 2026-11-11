@@ -1,5 +1,9 @@
 //! Cleanup targets: things that take space and can be safely reclaimed.
 
+// Every scanner returns `Option<Target>` so `scan_all` can treat them uniformly; some happen to
+// always find something.
+#![allow(clippy::unnecessary_wraps)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -59,7 +63,7 @@ impl Target {
 }
 
 fn s(v: &[&str]) -> Vec<String> {
-    v.iter().map(|x| x.to_string()).collect()
+    v.iter().map(std::string::ToString::to_string).collect()
 }
 
 /// Scan everything in parallel. Targets with nothing to reclaim are dropped.
@@ -155,10 +159,9 @@ fn journal() -> Option<Target> {
 }
 
 fn is_rotated_log(name: &str) -> bool {
-    name.ends_with(".gz")
-        || name.ends_with(".xz")
-        || name.ends_with(".zst")
-        || name.ends_with(".old")
+    ["gz", "xz", "zst", "old"]
+        .iter()
+        .any(|e| util::has_ext(name, e))
         || name
             .rsplit_once('.')
             .is_some_and(|(_, ext)| !ext.is_empty() && ext.chars().all(|c| c.is_ascii_digit()))
@@ -350,8 +353,7 @@ fn snap_old() -> Option<Target> {
             continue;
         }
         let sz = std::fs::metadata(format!("/var/lib/snapd/snaps/{name}_{rev}.snap"))
-            .map(|m| m.len())
-            .unwrap_or(0);
+            .map_or(0, |m| m.len());
         size += sz;
         details.push(format!("{name} revision {rev}  ({})", human(sz)));
         cmds.push(vec![
@@ -373,9 +375,7 @@ fn snap_old() -> Option<Target> {
 }
 
 fn cargo_cache() -> Option<Target> {
-    let base = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".cargo"));
+    let base = std::env::var_os("CARGO_HOME").map_or_else(|| home().join(".cargo"), PathBuf::from);
     let dirs: Vec<PathBuf> = ["registry/cache", "registry/src", "git/checkouts"]
         .iter()
         .map(|d| base.join(d))
@@ -478,9 +478,8 @@ fn android_cache() -> Option<Target> {
 }
 
 fn gradle_cache() -> Option<Target> {
-    let base = std::env::var_os("GRADLE_USER_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".gradle"));
+    let base =
+        std::env::var_os("GRADLE_USER_HOME").map_or_else(|| home().join(".gradle"), PathBuf::from);
     let dirs: Vec<PathBuf> = ["caches", "wrapper/dists", "daemon"]
         .iter()
         .map(|d| base.join(d))
@@ -618,7 +617,7 @@ fn usage_with_top_children(dir: &std::path::Path, n: usize) -> (u64, Vec<String>
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         match e.file_type() {
             Ok(t) if t.is_dir() => subdirs.push(e),
-            _ => loose += e.metadata().map(|m| m.blocks() * 512).unwrap_or(0),
+            _ => loose += e.metadata().map_or(0, |m| m.blocks() * 512),
         }
     }
     let mut sized: Vec<(u64, String)> = std::thread::scope(|sc| {

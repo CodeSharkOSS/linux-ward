@@ -1,7 +1,7 @@
 //! The Java tab: installed runtimes, running JVMs, and fixes that make Java faster and lighter.
 
 use super::perf_ui::{AMBER, BLUE, GREEN};
-use super::*;
+use super::{App, Confirm, Msg, RichText, egui, human, util};
 use crate::java::{self, JProc, JavaReport};
 use crate::perf::Rec;
 

@@ -1,6 +1,6 @@
 //! The confirmation dialog shown before anything is deleted or changed.
 
-use super::*;
+use super::{App, Color32, Confirm, Pm, RichText, egui, human, perf_ui, pkg};
 
 impl App {
     pub(super) fn confirm_dialog(&mut self, ctx: &egui::Context) {
@@ -94,7 +94,7 @@ impl App {
                     }
                     egui::ScrollArea::vertical().id_salt("upg").max_height(200.0).show(ui, |ui| {
                         for n in names {
-                            let new = self.upgradable.get(n).map(String::as_str).unwrap_or("?");
+                            let new = self.upgradable.get(n).map_or("?", String::as_str);
                             ui.label(RichText::new(format!("{n}  →  {new}")).monospace().size(12.0));
                         }
                     });
@@ -143,7 +143,7 @@ impl App {
 
         match decision {
             Some(true) => match c {
-                Confirm::Clean(idx) => self.start_clean(idx),
+                Confirm::Clean(idx) => self.start_clean(&idx),
                 Confirm::Remove { names, .. } => self.start_remove(names),
                 Confirm::Upgrade { names } => self.start_upgrade(names),
                 Confirm::Perf { title, actions, .. } => self.start_perf_action(title, actions),

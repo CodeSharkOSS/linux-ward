@@ -16,3 +16,19 @@ egui_extras = "0.37.0"
 libc = "0.2.191"
 trash = "5.3.0"
 walkdir = "2.5.0"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Byte counts, percentages and pixel sizes are converted for display or rough thresholds, where
+# the precision of f32/f64 is irrelevant and values are clamped to range first.
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# Parsers and egui layout code read top to bottom; splitting them would only scatter the flow.
+too_many_lines = "allow"
+# UI state structs hold one flag per checkbox or toggle.
+struct_excessive_bools = "allow"
+# Short names are idiomatic in parsers (`l`, `t`, `n`) and the pairs are always in the same scope.
+similar_names = "allow"
+many_single_char_names = "allow"

@@ -261,6 +261,11 @@ pub fn is_protected(name: &str) -> bool {
         && (base.starts_with("linux-") || base.starts_with("kernel"))
 }
 
+/// pacman's query commands exit 1 with no output when there is nothing to report.
+fn pacman_found_none(pm: Pm, out: &crate::util::CmdOut) -> bool {
+    pm == Pm::Pacman && out.stdout.trim().is_empty() && out.stderr.trim().is_empty()
+}
+
 impl Pm {
     pub fn detect() -> Option<Pm> {
         if which("apt-get") && which("dpkg-query") {
@@ -299,7 +304,11 @@ impl Pm {
     }
 
     pub fn cache_clean_cmds(self) -> Vec<Vec<String>> {
-        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let v = |a: &[&str]| {
+            a.iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+        };
         match self {
             Pm::Apt => vec![v(&["apt-get", "clean"])],
             Pm::Dnf => vec![v(&[Self::dnf(), "clean", "all"])],
@@ -344,9 +353,7 @@ impl Pm {
             Pm::Zypper => run("zypper", &["--non-interactive", "packages", "--unneeded"]),
         };
         // `pacman -Qdtq` exits 1 when there are no orphans.
-        if !out.ok
-            && !(self == Pm::Pacman && out.stdout.trim().is_empty() && out.stderr.trim().is_empty())
-        {
+        if !out.ok && !pacman_found_none(self, &out) {
             return Err(out.combined());
         }
         let mut names: Vec<String> = match self {
@@ -392,9 +399,7 @@ impl Pm {
             Pm::Zypper => run("zypper", &["--non-interactive", "packages", "--orphaned"]),
         };
         // `pacman -Qmq` exits 1 when there are none.
-        if !out.ok
-            && !(self == Pm::Pacman && out.stdout.trim().is_empty() && out.stderr.trim().is_empty())
-        {
+        if !out.ok && !pacman_found_none(self, &out) {
             return Err(out.combined());
         }
         let mut names: Vec<String> = match self {
@@ -448,9 +453,7 @@ impl Pm {
             Pm::Zypper => run("zypper", &["--non-interactive", "--quiet", "list-updates"]),
         };
         // `pacman -Qu` exits 1 when there is nothing to upgrade.
-        if !out.ok
-            && !(self == Pm::Pacman && out.stdout.trim().is_empty() && out.stderr.trim().is_empty())
-        {
+        if !out.ok && !pacman_found_none(self, &out) {
             return Err(out.combined());
         }
         let mut v = parse_upgradable(self, &out.stdout);
@@ -466,7 +469,11 @@ impl Pm {
     }
 
     pub fn upgrade_cmds(self, names: &[String]) -> Vec<Vec<String>> {
-        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let v = |a: &[&str]| {
+            a.iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+        };
         let names: Vec<String> = names.iter().filter(|n| valid_name(n)).cloned().collect();
         // pacman can only upgrade everything; for the others an empty list would mean "all packages".
         if names.is_empty() && self != Pm::Pacman {
@@ -596,7 +603,7 @@ impl Pm {
         let with = |base: &[&str]| -> Vec<String> {
             base.iter()
                 .chain(names.iter())
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect()
         };
         match self {
@@ -946,7 +953,7 @@ mod live_tests {
 
     /// Runs against the real system package manager (skipped when none is found).
     #[test]
-    #[ignore]
+    #[ignore = "queries the live system; run with --ignored"]
     fn live_preview() {
         let Some(pm) = Pm::detect() else { return };
         let pkgs = pm.list_installed().unwrap();
@@ -964,7 +971,7 @@ mod live_tests {
                 .take(5)
                 .collect::<Vec<_>>()
                 .join("\n"),
-            affected.as_ref().map(|a| a.len())
+            affected.as_ref().map(std::vec::Vec::len)
         );
         println!("orphans: {:?}", pm.list_orphans());
         println!(
@@ -979,7 +986,7 @@ mod live_upgrade_tests {
     use super::*;
 
     #[test]
-    #[ignore]
+    #[ignore = "queries the live system; run with --ignored"]
     fn live_upgradable() {
         let Some(pm) = Pm::detect() else { return };
         let r = pm.list_upgradable();
@@ -1194,8 +1201,8 @@ mod conflict_tests {
     fn rec(name: &str, prov: &[&str], conf: &[&str]) -> ConflictRec {
         ConflictRec {
             name: name.into(),
-            provides: prov.iter().map(|s| s.to_string()).collect(),
-            conflicts: conf.iter().map(|s| s.to_string()).collect(),
+            provides: prov.iter().map(std::string::ToString::to_string).collect(),
+            conflicts: conf.iter().map(std::string::ToString::to_string).collect(),
         }
     }
 

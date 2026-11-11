@@ -3,6 +3,7 @@
 //! the signals are added up so the most unusual processes rise to the top.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
@@ -50,15 +51,15 @@ pub struct ProcInfo {
     pub cmdline: String,
     /// stdin/stdout is a network socket.
     pub stdio_socket: bool,
-    /// Absolute-path LD_PRELOAD entries.
+    /// Absolute-path `LD_PRELOAD` entries.
     pub preload: Vec<String>,
     pub cpu_pct: f32,
     /// `Some(false)` = no installed package owns the binary.
     pub owned: Option<bool>,
     pub remote_ports: Vec<u16>,
-    /// Name of the parent process (an `ssh` parent makes `nc`/`socat` a ProxyCommand, not a shell).
+    /// Name of the parent process (an `ssh` parent makes `nc`/`socat` a `ProxyCommand`, not a shell).
     pub parent_comm: String,
-    /// The executable runs from a real AppImage FUSE mount under /tmp/.mount_*.
+    /// The executable runs from a real `AppImage` FUSE mount under /tmp/.mount_*.
     pub appimage_mounted: bool,
 }
 
@@ -408,7 +409,7 @@ fn connections() -> HashMap<u32, Vec<u16>> {
     map
 }
 
-/// Mount points of FUSE filesystems (AppImages mount themselves at /tmp/.mount_*).
+/// Mount points of FUSE filesystems (`AppImages` mount themselves at /tmp/.mount_*).
 fn fuse_mounts() -> Vec<String> {
     std::fs::read_to_string("/proc/self/mountinfo")
         .unwrap_or_default()
@@ -425,7 +426,7 @@ fn fuse_mounts() -> Vec<String> {
         .collect()
 }
 
-/// LD_PRELOAD libraries that ordinary software sets: system library folders and Steam's overlay.
+/// `LD_PRELOAD` libraries that ordinary software sets: system library folders and Steam's overlay.
 fn benign_preload(lib: &str) -> bool {
     ["/usr/lib/", "/usr/lib64/", "/lib/", "/lib64/"]
         .iter()
@@ -536,7 +537,7 @@ pub fn scan() -> ScanResult {
         .iter()
         .filter_map(|p| cpu_ticks(p.pid).map(|t| (p.pid, t)))
         .collect();
-    std::thread::sleep(std::time::Duration::from_millis(1000));
+    std::thread::sleep(std::time::Duration::from_secs(1));
     // SAFETY: sysconf has no preconditions.
     let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as f32;
     for p in &mut procs {
@@ -712,8 +713,7 @@ fn startup_entries(home: &str) -> Vec<Suspect> {
         let recent = std::fs::metadata(&f).ok().is_some_and(|m| {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+                .map_or(0, |d| d.as_secs() as i64);
             now - m.mtime() < 90 * 86_400
         });
         let text = std::fs::read_to_string(&f).unwrap_or_default();
@@ -765,11 +765,12 @@ fn clean(s: &str) -> String {
 pub fn encode(r: &ScanResult) -> String {
     let mut out = format!("H\t{}\t{}\n", r.inspected, r.opaque);
     for e in &r.exes {
-        out.push_str(&format!("E\t{}\n", clean(e)));
+        let _ = writeln!(out, "E\t{}", clean(e));
     }
     for s in &r.suspects {
-        out.push_str(&format!(
-            "S\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        let _ = writeln!(
+            out,
+            "S\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             s.pid.map_or("-".to_string(), |p| p.to_string()),
             s.score,
             s.uid,
@@ -782,7 +783,7 @@ pub fn encode(r: &ScanResult) -> String {
                 .map(|r| clean(r))
                 .collect::<Vec<_>>()
                 .join("\u{1f}"),
-        ));
+        );
     }
     out
 }

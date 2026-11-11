@@ -1,6 +1,9 @@
 //! The Large files tab: find big files and move them to Trash.
 
-use super::*;
+use super::{
+    Align, App, Column, Confirm, LargeFile, Layout, Msg, PathBuf, RichText, TableBuilder, egui,
+    field_width, human, util,
+};
 
 impl App {
     pub(super) fn start_large_scan(&mut self) {

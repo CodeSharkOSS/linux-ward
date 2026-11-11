@@ -2,7 +2,7 @@
 //! each finding with the repairs that exist for it.
 
 use super::perf_ui::{AMBER, BLUE, GREEN, RED};
-use super::*;
+use super::{App, Color32, Confirm, Msg, RichText, egui};
 use crate::fshealth::{self, Finding, Item, Repair, Sev};
 
 fn sev_style(s: Sev) -> (&'static str, Color32) {
@@ -26,7 +26,11 @@ fn show_finding(ui: &mut egui::Ui, f: &Finding, chosen: &mut Option<Repair>) {
             if !f.repairs.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     for r in &f.repairs {
-                        let label = if r.risky { format!("🔧 {}…", r.label) } else { format!("{}…", r.label) };
+                        let label = if r.risky {
+                            format!("🔧 {}…", r.label)
+                        } else {
+                            format!("{}…", r.label)
+                        };
                         if ui.button(label).on_hover_text(&r.note).clicked() {
                             *chosen = Some(r.clone());
                         }
@@ -40,7 +44,9 @@ fn show_finding(ui: &mut egui::Ui, f: &Finding, chosen: &mut Option<Repair>) {
 
 fn show_item(ui: &mut egui::Ui, item: &Item, chosen: &mut Option<Repair>) {
     let (icon, color) = sev_style(item.worst());
-    let head = RichText::new(format!("{icon}  {}", item.title)).color(color).strong();
+    let head = RichText::new(format!("{icon}  {}", item.title))
+        .color(color)
+        .strong();
     egui::CollapsingHeader::new(head)
         .id_salt(&item.title)
         .default_open(item.worst() >= Sev::Warn)
@@ -52,11 +58,16 @@ fn show_item(ui: &mut egui::Ui, item: &Item, chosen: &mut Option<Repair>) {
                 show_finding(ui, f, chosen);
             }
             if !item.raw.trim().is_empty() {
-                egui::CollapsingHeader::new("Tool output").id_salt(("raw", &item.title)).show(ui, |ui| {
-                    egui::ScrollArea::vertical().id_salt(("rawscroll", &item.title)).max_height(240.0).show(ui, |ui| {
-                        ui.label(RichText::new(item.raw.trim_end()).monospace().size(11.5));
+                egui::CollapsingHeader::new("Tool output")
+                    .id_salt(("raw", &item.title))
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt(("rawscroll", &item.title))
+                            .max_height(240.0)
+                            .show(ui, |ui| {
+                                ui.label(RichText::new(item.raw.trim_end()).monospace().size(11.5));
+                            });
                     });
-                });
             }
         });
 }
@@ -77,7 +88,14 @@ impl App {
             if self.fs_scanning {
                 ui.spinner();
                 ui.label("Scanning…");
-            } else if ui.button(if self.fs_report.is_some() { "Scan again" } else { "Scan" }).clicked() {
+            } else if ui
+                .button(if self.fs_report.is_some() {
+                    "Scan again"
+                } else {
+                    "Scan"
+                })
+                .clicked()
+            {
                 scan = true;
             }
         });
@@ -86,58 +104,69 @@ impl App {
                 .weak(),
         );
         if self.fs_stale {
-            ui.colored_label(AMBER, "A repair just ran: scan again to confirm the result.");
+            ui.colored_label(
+                AMBER,
+                "A repair just ran: scan again to confirm the result.",
+            );
         }
         ui.separator();
 
         let busy = self.busy.is_some();
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            let Some(r) = &self.fs_report else {
-                if !self.fs_scanning {
-                    ui.add_space(20.0);
-                    ui.label("Press Scan to check your drives and filesystems.");
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                let Some(r) = &self.fs_report else {
+                    if !self.fs_scanning {
+                        ui.add_space(20.0);
+                        ui.label("Press Scan to check your drives and filesystems.");
+                    }
+                    return;
+                };
+                for n in &r.notes {
+                    ui.colored_label(AMBER, format!("⚠ {n}"));
                 }
-                return;
-            };
-            for n in &r.notes {
-                ui.colored_label(AMBER, format!("⚠ {n}"));
-            }
-            let problems = r
-                .drives
-                .iter()
-                .chain(&r.filesystems)
-                .chain([&r.mounts, &r.kernel])
-                .filter(|i| i.worst() >= Sev::Warn)
-                .count();
-            if problems == 0 {
-                ui.colored_label(GREEN, "✔ Nothing needs attention.");
-            } else {
-                ui.colored_label(RED, format!("{problems} item(s) need attention (expanded below)."));
-            }
-            ui.add_space(6.0);
+                let problems = r
+                    .drives
+                    .iter()
+                    .chain(&r.filesystems)
+                    .chain([&r.mounts, &r.kernel])
+                    .filter(|i| i.worst() >= Sev::Warn)
+                    .count();
+                if problems == 0 {
+                    ui.colored_label(GREEN, "✔ Nothing needs attention.");
+                } else {
+                    ui.colored_label(
+                        RED,
+                        format!("{problems} item(s) need attention (expanded below)."),
+                    );
+                }
+                ui.add_space(6.0);
 
-            ui.add_enabled_ui(!busy, |ui| {
-                ui.strong("Drives (SMART)");
-                if r.drives.is_empty() {
-                    ui.label(RichText::new("No physical drives found.").weak());
-                }
-                for i in &r.drives {
-                    show_item(ui, i, &mut chosen);
-                }
-                ui.add_space(8.0);
-                ui.strong("Filesystems");
-                if r.filesystems.is_empty() {
-                    ui.label(RichText::new("No ext2/3/4, XFS, Btrfs or FAT filesystems found.").weak());
-                }
-                for i in &r.filesystems {
-                    show_item(ui, i, &mut chosen);
-                }
-                ui.add_space(8.0);
-                ui.strong("System");
-                show_item(ui, &r.mounts, &mut chosen);
-                show_item(ui, &r.kernel, &mut chosen);
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.strong("Drives (SMART)");
+                    if r.drives.is_empty() {
+                        ui.label(RichText::new("No physical drives found.").weak());
+                    }
+                    for i in &r.drives {
+                        show_item(ui, i, &mut chosen);
+                    }
+                    ui.add_space(8.0);
+                    ui.strong("Filesystems");
+                    if r.filesystems.is_empty() {
+                        ui.label(
+                            RichText::new("No ext2/3/4, XFS, Btrfs or FAT filesystems found.")
+                                .weak(),
+                        );
+                    }
+                    for i in &r.filesystems {
+                        show_item(ui, i, &mut chosen);
+                    }
+                    ui.add_space(8.0);
+                    ui.strong("System");
+                    show_item(ui, &r.mounts, &mut chosen);
+                    show_item(ui, &r.kernel, &mut chosen);
+                });
             });
-        });
 
         if scan {
             self.start_fs_scan();

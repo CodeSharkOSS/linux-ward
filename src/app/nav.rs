@@ -1,6 +1,6 @@
 //! Navigation: tabs are grouped into four sections so the top bar stays readable.
 
-use super::*;
+use super::{Align, App, Color32, Layout, RichText, egui};
 
 #[derive(PartialEq, Clone, Copy)]
 pub(super) enum Section {
@@ -110,7 +110,9 @@ impl Tab {
             Tab::Performance => {
                 "Boot time, startup items, kernels, tuning and system health checks"
             }
-            Tab::Disks => "Drive SMART health, filesystem checks and repairs, fstab and kernel-log errors",
+            Tab::Disks => {
+                "Drive SMART health, filesystem checks and repairs, fstab and kernel-log errors"
+            }
             Tab::Security => "Find files that may hold secrets, and permission mistakes",
             Tab::Processes => {
                 "Running programs that look unusual: deleted or /tmp executables, imitated names, hidden processes"

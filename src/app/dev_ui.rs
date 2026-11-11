@@ -1,6 +1,9 @@
 //! The Projects tab (build artifacts, stale toolchains, git housekeeping) and the Ports tab.
 
-use super::*;
+use super::{
+    Align, App, Color32, Column, Confirm, Layout, Msg, PathBuf, RichText, TableBuilder, egui,
+    field_width, human, util,
+};
 use crate::devclean::{self, Artifact, Repo, Toolchain};
 use crate::ports::{self, Listener};
 use crate::targets::Action;

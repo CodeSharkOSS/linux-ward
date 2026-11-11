@@ -5,6 +5,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use crate::targets::Action;
 use crate::util::{self, human, run, which};
 
 fn strs(v: &[&str]) -> Vec<String> {
-    v.iter().map(|s| s.to_string()).collect()
+    v.iter().map(std::string::ToString::to_string).collect()
 }
 
 // ----- boot ------------------------------------------------------------------
@@ -965,7 +966,7 @@ pub fn live_snapshot() -> Live {
         mem_avail: meminfo_kb(&mi, "MemAvailable"),
         swap_total: meminfo_kb(&mi, "SwapTotal"),
         swap_used: meminfo_kb(&mi, "SwapTotal").saturating_sub(meminfo_kb(&mi, "SwapFree")),
-        top_cpu: top(|p| p.cpu as f64, 0.5),
+        top_cpu: top(|p| f64::from(p.cpu), 0.5),
         top_mem: top(|p| p.mem as f64, 0.0),
         top_io: top(|p| p.io as f64, 1024.0),
         verdict: vec![],
@@ -1133,7 +1134,21 @@ pub fn tuning(pm: Option<Pm>, kernels: &[Kernel]) -> Vec<Tuning> {
         .unwrap_or_default()
         .trim()
         .to_string();
-    if !has_swap {
+    if has_swap {
+        v.push(t(
+            "Swap",
+            format!(
+                "{} active, swappiness {swappiness}.",
+                if zram {
+                    "Compressed zram swap is"
+                } else {
+                    "Swap is"
+                }
+            ),
+            Level::Ok,
+            None,
+        ));
+    } else {
         let fix = (pm == Some(Pm::Dnf)).then(|| Fix {
             label: "Install zram swap (takes effect after reboot)".into(),
             action: Action::Root(vec![strs(&[
@@ -1148,20 +1163,6 @@ pub fn tuning(pm: Option<Pm>, kernels: &[Kernel]) -> Vec<Tuning> {
             "No swap or zram is active. Without it memory spikes can freeze the desktop.".into(),
             Level::Warn,
             fix,
-        ));
-    } else {
-        v.push(t(
-            "Swap",
-            format!(
-                "{} active, swappiness {swappiness}.",
-                if zram {
-                    "Compressed zram swap is"
-                } else {
-                    "Swap is"
-                }
-            ),
-            Level::Ok,
-            None,
         ));
     }
 
@@ -1665,7 +1666,7 @@ fn vm_latency_recs(
                     .ok()
             })
         })
-        .map(|kb| kb as f64 / 1048576.0);
+        .map(|kb| kb as f64 / 1_048_576.0);
     if let Some(g) = mem_gib.filter(|g| *g < 2.0) {
         findings.push(Finding { title: format!("Only {g:.1} GiB of RAM"), detail: "A modern desktop needs about 4 GiB. Shut the VM down and raise its memory in the hypervisor settings.".into() });
     }
@@ -1678,7 +1679,7 @@ fn vm_latency_recs(
 /// Disable services for good: also their enabled `.socket` units (socket activation would start them again on demand),
 /// then check that nothing is still enabled so a failure shows up in the log instead of surfacing after a reboot.
 pub fn disable_cmds(units: &[&str], enabled: impl Fn(&str) -> bool) -> Vec<Vec<String>> {
-    let mut all: Vec<String> = units.iter().map(|u| u.to_string()).collect();
+    let mut all: Vec<String> = units.iter().map(std::string::ToString::to_string).collect();
     for u in units {
         let sock = format!("{}.socket", u.trim_end_matches(".service"));
         if enabled(&sock) {
@@ -1731,12 +1732,12 @@ pub fn tuned_profile_conf(sysctls: &[(&str, u32)], previous: &str) -> String {
         "[main]\nsummary=virtual-guest plus smoother write-back (written by linuxward)\ninclude=virtual-guest\n",
     );
     if profile_name_ok(previous) {
-        s.push_str(&format!("{PREV_MARK}{previous}\n"));
+        let _ = writeln!(s, "{PREV_MARK}{previous}");
     }
     if !sysctls.is_empty() {
         s.push_str("\n[sysctl]\n");
         for (k, v) in sysctls {
-            s.push_str(&format!("{k}={v}\n"));
+            let _ = writeln!(s, "{k}={v}");
         }
     }
     s
@@ -1784,6 +1785,20 @@ pub fn ppd_remap_cmds(power_mode: &str) -> Vec<Vec<String>> {
         ]),
     ]
 }
+
+const VM_USELESS: &[&str] = &[
+    "bluetooth.service",
+    "ModemManager.service",
+    "switcheroo-control.service",
+    "iio-sensor-proxy.service",
+];
+
+const VM_OPTIONAL: &[&str] = &[
+    "kdump.service",
+    "abrtd.service",
+    "cups-browsed.service",
+    "avahi-daemon.service",
+];
 
 fn build_recs(
     pm: Option<Pm>,
@@ -1899,7 +1914,7 @@ fn build_recs(
             let missing: Vec<String> = want
                 .iter()
                 .filter(|p| !pkg_installed(pm, p))
-                .map(|p| p.to_string())
+                .map(std::string::ToString::to_string)
                 .collect();
             if !missing.is_empty() {
                 recs.push(Rec {
@@ -1956,7 +1971,7 @@ fn build_recs(
         // tuned has a profile made for guests.
         if tuned_on {
             let active = run("tuned-adm", &["active"]).stdout;
-            let profile = active.split(':').nth(1).map(str::trim).unwrap_or("");
+            let profile = active.split(':').nth(1).map_or("", str::trim);
             if !profile.is_empty() && profile != TUNED_PROFILE {
                 let mut cmds = vec![
                     strs(&["mkdir", "-p", TUNED_DIR]),
@@ -2007,12 +2022,6 @@ fn build_recs(
             });
         }
         // Hardware services that a VM does not have.
-        const VM_USELESS: &[&str] = &[
-            "bluetooth.service",
-            "ModemManager.service",
-            "switcheroo-control.service",
-            "iio-sensor-proxy.service",
-        ];
         let on: Vec<&str> = VM_USELESS
             .iter()
             .copied()
@@ -2030,12 +2039,6 @@ fn build_recs(
                 actions: vec![Action::Root(cmds)],
             });
         }
-        const VM_OPTIONAL: &[&str] = &[
-            "kdump.service",
-            "abrtd.service",
-            "cups-browsed.service",
-            "avahi-daemon.service",
-        ];
         let opt: Vec<&str> = VM_OPTIONAL
             .iter()
             .copied()
@@ -2122,15 +2125,12 @@ pub fn undo_items() -> Vec<Undo> {
         }
         // Deleting the profile while tuned still points at it would break tuned at the next start,
         // so the delete runs only if switching away succeeded.
-        let switch = match &prev {
-            Some(p) => {
-                what.push_str(&format!(", then switches back to `{p}`"));
-                p.clone()
-            }
-            None => {
-                what.push_str(", then switches to the profile tuned recommends for this machine (the previous one wasn't recorded)");
-                String::new()
-            }
+        let switch = if let Some(p) = &prev {
+            let _ = write!(what, ", then switches back to `{p}`");
+            p.clone()
+        } else {
+            what.push_str(", then switches to the profile tuned recommends for this machine (the previous one wasn't recorded)");
+            String::new()
         };
         cmds.push(vec![
             "sh".into(),
@@ -2154,9 +2154,7 @@ pub fn undo_items() -> Vec<Undo> {
                 std::fs::metadata(FSTAB_BAK)
                     .and_then(|m| m.modified())
                     .ok()
-                    .and_then(|t| t.elapsed().ok())
-                    .map(|d| format!("{} day(s) ago", d.as_secs() / 86_400))
-                    .unwrap_or_else(|| "earlier".into())
+                    .and_then(|t| t.elapsed().ok()).map_or_else(|| "earlier".into(), |d| format!("{} day(s) ago", d.as_secs() / 86_400))
             ),
             actions: root(vec![
                 strs(&["sh", "-c", "cp -a -- /etc/fstab /etc/fstab.linuxward.before-undo && cp -a -- \"$1\" /etc/fstab.new && mv -f -- /etc/fstab.new /etc/fstab", "sh", FSTAB_BAK]),
@@ -2301,6 +2299,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "parsed text compared with the same literals"
+    )]
     fn pressure() {
         let p = parse_pressure(
             "some avg10=9.68 avg60=5.47 avg300=6.39 total=1\nfull avg10=0.50 avg60=0.00 avg300=0.00 total=0\n",
@@ -2503,7 +2505,7 @@ mod live_perf_tests {
     use super::*;
 
     #[test]
-    #[ignore]
+    #[ignore = "queries the live system; run with --ignored"]
     fn live_snapshot_print() {
         let pm = Pm::detect();
         let s = load_snapshot(pm);

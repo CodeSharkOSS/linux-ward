@@ -135,11 +135,13 @@ pub fn scan(root: &Path, min_size: u64, include_hidden: bool) -> (Vec<DupGroup>,
         .same_file_system(true)
         .into_iter()
         .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            // Copies in these trees are expected at their exact paths by tools and games.
+            let skipped_tree = e.file_type().is_dir() && SKIP_TREES.contains(&name.as_ref());
             e.depth() == 0
-                // Copies in these trees are expected at their exact paths by tools and games.
-                || (!(e.file_type().is_dir() && SKIP_TREES.contains(&e.file_name().to_string_lossy().as_ref()))
+                || (!skipped_tree
                     && !crate::util::excluded(e.path())
-                    && (include_hidden || !e.file_name().to_string_lossy().starts_with('.')))
+                    && (include_hidden || !name.starts_with('.')))
         })
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
@@ -163,8 +165,7 @@ pub fn scan(root: &Path, min_size: u64, include_hidden: bool) -> (Vec<DupGroup>,
     let candidates: Vec<(u64, Vec<Candidate>)> =
         by_size.into_iter().filter(|(_, v)| v.len() > 1).collect();
     let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
+        .map_or(4, std::num::NonZero::get)
         .min(8);
     let mut lanes: Vec<Vec<(u64, Vec<Candidate>)>> = (0..threads).map(|_| Vec::new()).collect();
     // Deal the biggest groups out first so the lanes finish at about the same time.

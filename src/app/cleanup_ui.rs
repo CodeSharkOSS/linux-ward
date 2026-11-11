@@ -1,9 +1,11 @@
 //! The Cleanup tab: reclaimable space found by the scan, cleaned in one go.
 
-use super::*;
+use super::{
+    Align, App, Color32, Confirm, Group, Layout, Msg, RichText, Target, egui, human, targets,
+};
 
 impl App {
-    pub(super) fn start_clean(&mut self, idx: Vec<usize>) {
+    pub(super) fn start_clean(&mut self, idx: &[usize]) {
         let chosen: Vec<Target> = idx
             .iter()
             .filter_map(|&i| self.targets.get(i).cloned())
@@ -96,7 +98,7 @@ impl App {
                 ui.add_space(4.0);
 
                 let mut last_group: Option<Group> = None;
-                for t in self.targets.iter_mut() {
+                for t in &mut self.targets {
                     if last_group != Some(t.group) {
                         last_group = Some(t.group);
                         ui.add_space(6.0);

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use super::*;
+use super::{App, Color32, Confirm, Group, Msg, RichText, Tab, Target, egui, human, targets};
 use crate::perf::{self, LeftKind, Level, Pressure, Proc};
 use crate::targets::Action;
 
@@ -368,7 +368,7 @@ impl App {
                 s.kernels.len(),
                 s.kernels.iter().filter(|k| k.removable()).count()
             )).strong()).id_salt("perf-kernels")
-            .default_open(s.kernels.iter().any(|k| k.removable()))
+            .default_open(s.kernels.iter().any(super::super::perf::Kernel::removable))
             .show(ui, |ui| {
                 if s.kernels.is_empty() {
                     ui.label(RichText::new("Kernel management is supported on Fedora/RHEL (dnf) and Debian/Ubuntu (apt).").weak());

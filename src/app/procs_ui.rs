@@ -1,6 +1,6 @@
 //! The Processes tab: running programs ranked by how unusual they look.
 
-use super::*;
+use super::{App, Color32, Confirm, Msg, PathBuf, RichText, egui, field_width, util};
 use crate::clam;
 use crate::procscan::{self, Level, ScanResult, Suspect};
 
@@ -22,28 +22,26 @@ impl App {
             return;
         }
         let exe = std::env::current_exe()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "linuxward".into());
+            .map_or_else(|_| "linuxward".into(), |p| p.display().to_string());
         let home = util::home().display().to_string();
         std::thread::spawn(move || {
             let out =
                 util::run_privileged(&[vec![exe, "--proc-scan".into(), "--home".into(), home]]);
-            match procscan::decode(&out.stdout) {
-                Some(r) => n.send(Msg::Procs(Box::new(r))),
-                None => {
-                    let why = if out.stderr.trim().is_empty() {
-                        out.combined()
-                    } else {
-                        out.stderr.clone()
-                    };
-                    n.send(Msg::Log(format!(
-                        "✘ Administrator scan failed: {}",
-                        why.lines().next().unwrap_or("no result")
-                    )));
-                    // Fall back to what the current user can see.
-                    n.send(Msg::ProcsNotElevated);
-                    n.send(Msg::Procs(Box::new(procscan::scan())));
-                }
+            if let Some(r) = procscan::decode(&out.stdout) {
+                n.send(Msg::Procs(Box::new(r)));
+            } else {
+                let why = if out.stderr.trim().is_empty() {
+                    out.combined()
+                } else {
+                    out.stderr.clone()
+                };
+                n.send(Msg::Log(format!(
+                    "✘ Administrator scan failed: {}",
+                    why.lines().next().unwrap_or("no result")
+                )));
+                // Fall back to what the current user can see.
+                n.send(Msg::ProcsNotElevated);
+                n.send(Msg::Procs(Box::new(procscan::scan())));
             }
         });
     }
@@ -57,7 +55,7 @@ impl App {
         self.procs_scanned = true;
     }
 
-    /// Run a ClamAV scan in the background; the result lands in the panel on this tab.
+    /// Run a `ClamAV` scan in the background; the result lands in the panel on this tab.
     fn start_clam(&mut self, job: ClamJob) {
         self.clam_scanning = true;
         self.clam_result = None;
@@ -223,7 +221,7 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                for s in self.procs.iter() {
+                for s in &self.procs {
                     let (label, color) = match s.level() {
                         Level::High => ("HIGH", Color32::from_rgb(230, 90, 80)),
                         Level::Medium => ("MEDIUM", Color32::from_rgb(230, 170, 60)),

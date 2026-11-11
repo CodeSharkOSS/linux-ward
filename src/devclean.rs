@@ -70,7 +70,9 @@ fn artifact_rules(dir: &Path) -> Vec<(&'static str, &'static str)> {
     if std::fs::read_dir(dir).is_ok_and(|rd| {
         rd.flatten().any(|e| {
             let n = e.file_name().to_string_lossy().to_string();
-            n.ends_with(".csproj") || n.ends_with(".sln") || n.ends_with(".fsproj")
+            ["csproj", "sln", "fsproj"]
+                .iter()
+                .any(|e| crate::util::has_ext(&n, e))
         })
     }) {
         for d in ["bin", "obj"] {
@@ -185,8 +187,7 @@ pub fn scan_artifacts(root: &Path) -> Vec<Artifact> {
                             size: dir_usage(path),
                             idle_days: last_activity(path)
                                 .and_then(|t| now.duration_since(t).ok())
-                                .map(|d| d.as_secs() / 86_400)
-                                .unwrap_or(0),
+                                .map_or(0, |d| d.as_secs() / 86_400),
                         })
                         .collect::<Vec<_>>()
                 })
@@ -398,7 +399,7 @@ pub fn toolchains() -> Vec<Toolchain> {
     out
 }
 
-/// "IntelliJIdea2026.2" → ("IntelliJIdea", "2026.2"). Folders without a version are not IDE profiles.
+/// "IntelliJIdea2026.2" → ("`IntelliJIdea`", "2026.2"). Folders without a version are not IDE profiles.
 fn split_ide_name(name: &str) -> Option<(&str, &str)> {
     let i = name.find(|c: char| c.is_ascii_digit())?;
     let (product, ver) = name.split_at(i);
@@ -408,15 +409,13 @@ fn split_ide_name(name: &str) -> Option<(&str, &str)> {
     ok.then_some((product, ver))
 }
 
-/// Settings, plugins and caches that JetBrains IDEs and Android Studio keep per version.
+/// Settings, plugins and caches that `JetBrains` IDEs and Android Studio keep per version.
 /// Each upgrade leaves the previous version's folders behind; the newest of each product is kept.
 fn ide_leftovers() -> Vec<Toolchain> {
     use std::collections::BTreeMap;
     let h = home();
     let xdg = |var: &str, fallback: &str| {
-        std::env::var_os(var)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| h.join(fallback))
+        std::env::var_os(var).map_or_else(|| h.join(fallback), PathBuf::from)
     };
     let roots = [
         (xdg("XDG_CONFIG_HOME", ".config"), "settings"),
@@ -476,8 +475,7 @@ fn android_sdk_root() -> Option<PathBuf> {
 fn android_sdk() -> Vec<Toolchain> {
     let mut out = Vec::new();
     let avd_home = std::env::var_os("ANDROID_AVD_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".android/avd"));
+        .map_or_else(|| home().join(".android/avd"), PathBuf::from);
 
     // Virtual devices, and the system images they need.
     let mut used_images: Vec<String> = Vec::new();
@@ -823,7 +821,7 @@ mod tests {
         std::fs::write(base.join("alias/lts/iron"), "v20.11.1\n").unwrap();
         let installed: Vec<String> = ["20.11.1", "22.5.0", "23.1.0"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         // The LTS default is 20.x, even though 23 is newer: 23 must not be the protected one.
         assert_eq!(

@@ -309,7 +309,7 @@ fn by_name(path: &Path, name: &str, mode: u32) -> Option<(Severity, String, Stri
             format!("Permissions: {}", describe_mode(mode)),
         ));
     }
-    if (lname == ".env" || lname.starts_with(".env.") || lname.ends_with(".env"))
+    if (lname == ".env" || lname.starts_with(".env.") || crate::util::has_ext(&lname, "env"))
         && !is_example(name)
     {
         return Some((
@@ -481,8 +481,7 @@ fn check_file(path: &Path, name: &str, mode: u32, size: u64, opts: Options) -> O
 /// Split `items` over up to 8 threads and gather what `f` returns for each.
 fn par_collect<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> Option<R> + Sync) -> Vec<R> {
     let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
+        .map_or(4, std::num::NonZero::get)
         .min(8);
     let chunk = items.len().div_ceil(threads).max(1);
     std::thread::scope(|sc| {
@@ -508,10 +507,10 @@ pub fn scan(root: &Path, opts: Options) -> (Vec<Finding>, usize) {
         .into_iter()
         .filter_entry(|e| {
             let n = e.file_name().to_string_lossy();
-            e.depth() == 0
-                || !crate::util::excluded(e.path())
-                    && !(e.file_type().is_dir() && SKIP_DIRS.contains(&n.as_ref()))
-                    && !(n == "objects" && e.path().parent().is_some_and(|p| p.ends_with(".git")))
+            let skipped_dir = e.file_type().is_dir() && SKIP_DIRS.contains(&n.as_ref());
+            let git_objects =
+                n == "objects" && e.path().parent().is_some_and(|p| p.ends_with(".git"));
+            e.depth() == 0 || (!crate::util::excluded(e.path()) && !skipped_dir && !git_objects)
         })
         .filter_map(Result::ok)
     {

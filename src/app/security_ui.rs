@@ -1,6 +1,9 @@
 //! The Security tab: lists files that commonly hold secrets, and permission mistakes.
 
-use super::*;
+use super::{
+    Align, App, Color32, Column, Confirm, Layout, Msg, PathBuf, RichText, TableBuilder, egui,
+    field_width, util,
+};
 use crate::secscan::{self, Finding, Severity};
 
 pub(super) struct SecEntry {

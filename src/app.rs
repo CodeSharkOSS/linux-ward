@@ -291,7 +291,7 @@ impl App {
             view: PkgView::All,
             unused: HashSet::new(),
             obsolete: HashSet::new(),
-            conflicts: Default::default(),
+            conflicts: std::collections::BTreeMap::new(),
             upgradable: HashMap::new(),
             upgradable_known: false,
             group: false,
@@ -402,9 +402,10 @@ impl App {
                 vec![
                     Box::new(move || n.send(Msg::Disks(util::disks()))),
                     Box::new(move || {
-                        let pkgs = pm
-                            .map(|p| p.list_installed())
-                            .unwrap_or_else(|| Err("No supported package manager".into()));
+                        let pkgs = pm.map_or_else(
+                            || Err("No supported package manager".into()),
+                            super::pkg::Pm::list_installed,
+                        );
                         let sizes: HashMap<String, u64> = pkgs
                             .as_ref()
                             .map(|v| v.iter().map(|p| (p.name.clone(), p.size)).collect())

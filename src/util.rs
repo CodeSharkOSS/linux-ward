@@ -1,6 +1,7 @@
 //! Small helpers: size formatting, disk usage, running commands, privilege escalation.
 
 use std::ffi::CString;
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -57,7 +58,7 @@ pub fn clear_dir_contents(dir: &Path) -> (u64, Vec<String>) {
             errors.push(format!("{}: kept (in your exclude list)", p.display()));
             continue;
         }
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
         let res = if is_dir {
             // `dir_usage` stays on one filesystem; deleting must too, or a bind/FUSE mount
             // inside the folder would lose the files on the mounted volume.
@@ -130,8 +131,7 @@ pub fn remove_dir_checked(dir: &Path) -> Result<u64, String> {
 
 fn config_dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".config"))
+        .map_or_else(|| home().join(".config"), PathBuf::from)
         .join("linuxward")
 }
 
@@ -168,8 +168,7 @@ pub fn log_action(line: &str) {
     static FILE: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
     let file = FILE.get_or_init(|| {
         let dir = std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home().join(".local/state"))
+            .map_or_else(|| home().join(".local/state"), PathBuf::from)
             .join("linuxward");
         let _ = std::fs::create_dir_all(&dir);
         Mutex::new(
@@ -185,8 +184,7 @@ pub fn log_action(line: &str) {
     {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs());
         let _ = writeln!(f, "{} {line}", utc_stamp(secs));
     }
 }
@@ -225,7 +223,7 @@ pub fn statvfs(path: &Path) -> Option<(u64, u64)> {
     // SAFETY: statvfs fills the zeroed struct; we check the return code.
     let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
     // SAFETY: `c` is a valid NUL-terminated path and `s` is a valid, writable statvfs.
-    if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
+    if unsafe { libc::statvfs(c.as_ptr(), &raw mut s) } != 0 {
         return None;
     }
     let frsize = s.f_frsize as u64;
@@ -273,9 +271,7 @@ fn unescape_mount(s: &str) -> String {
 }
 
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/root"))
+    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from)
 }
 
 pub fn xdg_cache() -> PathBuf {
@@ -292,10 +288,16 @@ pub fn xdg_data() -> PathBuf {
         .unwrap_or_else(|| home().join(".local/share"))
 }
 
+/// True if `name` ends in `.ext`, ignoring case.
+pub fn has_ext(name: &str, ext: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
 pub fn which(name: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
-        .unwrap_or(false)
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -324,6 +326,19 @@ pub fn run(cmd: &str, args: &[&str]) -> CmdOut {
     run_with_stdin(cmd, args, None)
 }
 
+/// Read a child's pipe to the end on its own thread. Both pipes must be drained while waiting:
+/// a child that writes more than a pipe buffer (~64 KiB) would otherwise block forever and be
+/// reported as a timeout.
+fn drain<R: std::io::Read + Send + 'static>(r: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut r) = r {
+            let _ = r.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
+
 /// Like `run`, but gives up (and kills the child) after `secs` seconds. For tools that can hang, such as `jcmd`.
 pub fn run_timeout(cmd: &str, args: &[&str], secs: u64) -> CmdOut {
     let spawned = Command::new(cmd)
@@ -345,17 +360,6 @@ pub fn run_timeout(cmd: &str, args: &[&str], secs: u64) -> CmdOut {
             };
         }
     };
-    // Drain both pipes while waiting: a child that writes more than a pipe buffer (~64 KiB)
-    // would otherwise block forever and be reported as a timeout.
-    fn drain<R: std::io::Read + Send + 'static>(r: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut r) = r {
-                let _ = r.read_to_end(&mut buf);
-            }
-            buf
-        })
-    }
     let out_reader = drain(child.stdout.take());
     let err_reader = drain(child.stderr.take());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
@@ -363,7 +367,7 @@ pub fn run_timeout(cmd: &str, args: &[&str], secs: u64) -> CmdOut {
         match child.try_wait() {
             Ok(Some(st)) => break st,
             Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(40))
+                std::thread::sleep(std::time::Duration::from_millis(40));
             }
             _ => {
                 let _ = child.kill();
@@ -466,10 +470,11 @@ pub fn run_privileged(commands: &[Vec<String>]) -> CmdOut {
             .map(|a| sh_quote(a))
             .collect::<Vec<_>>()
             .join(" ");
-        script.push_str(&format!(
-            "printf '%s\\n' {}\n{line} 2>&1 || {{ echo \"!! command failed with exit code $?\"; rc=1; }}\n",
+        let _ = writeln!(
+            script,
+            "printf '%s\\n' {}\n{line} 2>&1 || {{ echo \"!! command failed with exit code $?\"; rc=1; }}",
             sh_quote(&format!("# {line}"))
-        ));
+        );
     }
     script.push_str("exit $rc\n");
     if is_root() {
@@ -487,7 +492,7 @@ pub fn run_privileged(commands: &[Vec<String>]) -> CmdOut {
     match out.code {
         Some(126) => out.stderr = "Authentication was cancelled.".into(),
         Some(127) => {
-            out.stderr = "Not authorized (or no polkit authentication agent is running).".into()
+            out.stderr = "Not authorized (or no polkit authentication agent is running).".into();
         }
         _ => {}
     }

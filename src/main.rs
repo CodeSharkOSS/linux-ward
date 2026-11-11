@@ -1,3 +1,6 @@
+//! `LinuxWard`: a Linux desktop app (egui) and small command-line front end for disk cleanup,
+//! package management, security scans and system health.
+
 use eframe::egui;
 
 mod app;
@@ -68,7 +71,7 @@ fn main() -> eframe::Result {
 fn clean_cli(dry_run: bool) {
     use util::human;
     let pm = pkg::Pm::detect();
-    let targets: Vec<targets::Target> = targets::scan_all(pm, &Default::default())
+    let targets: Vec<targets::Target> = targets::scan_all(pm, &std::collections::HashMap::new())
         .into_iter()
         .filter(|t| t.selected && !t.needs_root())
         .collect();
@@ -81,7 +84,7 @@ fn clean_cli(dry_run: bool) {
             "{} {:<24} {}",
             if dry_run { "would clean" } else { "cleaning" },
             t.name,
-            t.size.map(human).unwrap_or_else(|| "?".into())
+            t.size.map_or_else(|| "?".into(), human)
         );
     }
     if dry_run {
@@ -105,12 +108,9 @@ fn scan_report() {
         );
     }
     let pm = pkg::Pm::detect();
-    println!(
-        "\nPackage manager: {}",
-        pm.map(|p| p.name()).unwrap_or("none")
-    );
+    println!("\nPackage manager: {}", pm.map_or("none", pkg::Pm::name));
     let pkgs = pm
-        .map(|p| p.list_installed())
+        .map(pkg::Pm::list_installed)
         .transpose()
         .unwrap_or_else(|e| {
             eprintln!("package list failed: {e}");
@@ -129,7 +129,7 @@ fn scan_report() {
     }
     println!("\nReclaimable:");
     for t in targets::scan_all(pm, &sizes) {
-        let size = t.size.map(human).unwrap_or_else(|| "?".into());
+        let size = t.size.map_or_else(|| "?".into(), human);
         println!(
             "  {:<28} {:>10} {}",
             t.name,

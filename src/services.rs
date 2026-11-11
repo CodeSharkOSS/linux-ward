@@ -756,7 +756,7 @@ mod live_tests {
     use super::*;
 
     #[test]
-    #[ignore]
+    #[ignore = "queries the live system; run with --ignored"]
     fn live_services_print() {
         let pm = Pm::detect();
         for scope in [Scope::System, Scope::User] {

@@ -82,10 +82,15 @@ pub struct Report {
 }
 
 fn v(args: &[&str]) -> Vec<String> {
-    args.iter().map(|s| s.to_string()).collect()
+    args.iter().map(std::string::ToString::to_string).collect()
 }
 
-fn root_repair(label: &str, note: impl Into<String>, cmds: Vec<Vec<String>>, risky: bool) -> Repair {
+fn root_repair(
+    label: &str,
+    note: impl Into<String>,
+    cmds: Vec<Vec<String>>,
+    risky: bool,
+) -> Repair {
     Repair {
         label: label.into(),
         note: note.into(),
@@ -263,7 +268,10 @@ fn has_opt(opts: &str, o: &str) -> bool {
 
 /// Mount points the running system depends on: never unmounted for a repair.
 fn is_system_mount(mp: &str) -> bool {
-    ["/", "/usr", "/var", "/etc", "/opt", "/bin", "/sbin", "/lib", "/lib64", "/nix"].contains(&mp)
+    [
+        "/", "/usr", "/var", "/etc", "/opt", "/bin", "/sbin", "/lib", "/lib64", "/nix",
+    ]
+    .contains(&mp)
 }
 
 struct Ctx {
@@ -295,7 +303,10 @@ fn on_unmounted(
     remount_codes: Option<&str>,
 ) -> Option<(Vec<Vec<String>>, String)> {
     let Some(mp) = &fs.mountpoint else {
-        return Some((vec![cmd], format!("{} is not mounted, so it is checked directly.", fs.dev)));
+        return Some((
+            vec![cmd],
+            format!("{} is not mounted, so it is checked directly.", fs.dev),
+        ));
     };
     if is_system_mount(mp) {
         return None;
@@ -304,18 +315,27 @@ fn on_unmounted(
     let remount = if ctx.fstab.contains_key(mp) {
         format!("mount {q}")
     } else {
-        format!("echo {}", util::sh_quote(&format!("{mp} is not in /etc/fstab: mount it again from your file manager")))
+        format!(
+            "echo {}",
+            util::sh_quote(&format!(
+                "{mp} is not in /etc/fstab: mount it again from your file manager"
+            ))
+        )
     };
     let after = match remount_codes {
         Some(p) => format!(
             "case $rc in {p}) {remount};; *) echo {};; esac",
-            util::sh_quote(&format!("Not remounting {mp}: the tool did not finish cleanly"))
+            util::sh_quote(&format!(
+                "Not remounting {mp}: the tool did not finish cleanly"
+            ))
         ),
         None => remount,
     };
     let script = format!(
         "umount {q} || {{ echo {}; exit 1; }}; {}; rc=$?; {after}; exit $rc",
-        util::sh_quote(&format!("Could not unmount {mp}: something is using it. Close those programs and try again.")),
+        util::sh_quote(&format!(
+            "Could not unmount {mp}: something is using it. Close those programs and try again."
+        )),
         join_cmd(&cmd),
     );
     Some((
@@ -337,8 +357,11 @@ fn drive_warning(ctx: &Ctx) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 
 fn kv(text: &str, key: &str) -> Option<String> {
-    text.lines()
-        .find_map(|l| l.trim_start().strip_prefix(key).map(|r| r.trim().to_string()))
+    text.lines().find_map(|l| {
+        l.trim_start()
+            .strip_prefix(key)
+            .map(|r| r.trim().to_string())
+    })
 }
 
 fn leading_num(s: &str) -> u64 {
@@ -369,32 +392,42 @@ fn self_test_repairs(dev: &str) -> Finding {
 fn analyze_smart(dev: &str, text: &str) -> Vec<Finding> {
     let low = text.to_lowercase();
     if text.trim().is_empty() || low.contains("command not found") {
-        return vec![Finding::new(Sev::Info, "SMART could not be read (smartctl produced no output).")];
+        return vec![Finding::new(
+            Sev::Info,
+            "SMART could not be read (smartctl produced no output).",
+        )];
     }
     if low.contains("permission denied") {
-        return vec![Finding::new(Sev::Info, "SMART could not be read: permission denied.")];
+        return vec![Finding::new(
+            Sev::Info,
+            "SMART could not be read: permission denied.",
+        )];
     }
     if low.contains("unable to detect device type")
         || low.contains("smart support is: unavailable")
         || low.contains("lacks smart")
         || low.contains("does not support smart")
     {
-        return vec![Finding::new(Sev::Info, "This device does not report SMART data.")
-            .advice("Virtual disks and some USB enclosures don't. Nothing to repair.")];
+        return vec![
+            Finding::new(Sev::Info, "This device does not report SMART data.")
+                .advice("Virtual disks and some USB enclosures don't. Nothing to repair."),
+        ];
     }
     if text.contains("NVMe") && low.contains("percentage used") {
-        return analyze_nvme(dev, text);
+        return analyze_nvme(text);
     }
 
     let mut f: Vec<Finding> = vec![];
     if low.contains("smart support is: disabled") {
         f.push(
-            Finding::new(Sev::Warn, "SMART monitoring is switched off on this drive.").repair(root_repair(
-                "Switch SMART on",
-                "Runs `smartctl -s on`. Safe; the drive starts recording health data.",
-                vec![v(&["smartctl", "-s", "on", dev])],
-                false,
-            )),
+            Finding::new(Sev::Warn, "SMART monitoring is switched off on this drive.").repair(
+                root_repair(
+                    "Switch SMART on",
+                    "Runs `smartctl -s on`. Safe; the drive starts recording health data.",
+                    vec![v(&["smartctl", "-s", "on", dev])],
+                    false,
+                ),
+            ),
         );
     }
 
@@ -404,7 +437,10 @@ fn analyze_smart(dev: &str, text: &str) -> Vec<Finding> {
     {
         judged = true;
         if r.to_uppercase().contains("PASSED") || r.trim() == "OK" {
-            f.push(Finding::new(Sev::Ok, "The drive's own health verdict: passed."));
+            f.push(Finding::new(
+                Sev::Ok,
+                "The drive's own health verdict: passed.",
+            ));
         } else {
             f.push(
                 Finding::new(Sev::Bad, format!("The drive reports that it is failing ({r})."))
@@ -418,7 +454,9 @@ fn analyze_smart(dev: &str, text: &str) -> Vec<Finding> {
         if t.len() < 10 {
             continue;
         }
-        let Ok(id) = t[0].parse::<u32>() else { continue };
+        let Ok(id) = t[0].parse::<u32>() else {
+            continue;
+        };
         let name = t[1];
         let value: u32 = t[3].parse().unwrap_or(100);
         let raw = leading_num(t[9]);
@@ -457,12 +495,15 @@ fn analyze_smart(dev: &str, text: &str) -> Vec<Finding> {
                         format!("The SSD has used almost all of its rated life ({name}: {value} left)."),
                     )
                     .advice("Plan to replace it; keep backups current."),
-                )
+                );
             }
             _ => {}
         }
         let when_failed = t[8];
-        if when_failed != "-" && !when_failed.is_empty() && when_failed.chars().next().is_some_and(char::is_alphabetic) {
+        if when_failed != "-"
+            && !when_failed.is_empty()
+            && when_failed.chars().next().is_some_and(char::is_alphabetic)
+        {
             let now = when_failed.to_uppercase().contains("NOW");
             f.push(Finding::new(
                 if now { Sev::Bad } else { Sev::Warn },
@@ -472,19 +513,36 @@ fn analyze_smart(dev: &str, text: &str) -> Vec<Finding> {
     }
 
     if low.contains("no self-tests have been logged") {
-        f.push(Finding::new(Sev::Info, "No self-test has ever been run on this drive."));
+        f.push(Finding::new(
+            Sev::Info,
+            "No self-test has ever been run on this drive.",
+        ));
     } else if let Some(l) = text.lines().find(|l| l.trim_start().starts_with("# 1")) {
-        let status = l.trim_start().trim_start_matches("# 1").split_whitespace().collect::<Vec<_>>().join(" ");
+        let status = l
+            .trim_start()
+            .trim_start_matches("# 1")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         if status.contains("Completed without error") {
             f.push(Finding::new(Sev::Ok, "The most recent self-test passed."));
         } else if status.contains("in progress") {
-            f.push(Finding::new(Sev::Info, "A self-test is running: scan again when it has finished."));
+            f.push(Finding::new(
+                Sev::Info,
+                "A self-test is running: scan again when it has finished.",
+            ));
         } else if status.contains("Aborted") || status.contains("Interrupted") {
-            f.push(Finding::new(Sev::Info, "The most recent self-test was interrupted."));
+            f.push(Finding::new(
+                Sev::Info,
+                "The most recent self-test was interrupted.",
+            ));
         } else {
             f.push(
-                Finding::new(Sev::Bad, format!("The most recent self-test failed: {status}"))
-                    .advice("The drive could not read part of its surface. Back up and replace it."),
+                Finding::new(
+                    Sev::Bad,
+                    format!("The most recent self-test failed: {status}"),
+                )
+                .advice("The drive could not read part of its surface. Back up and replace it."),
             );
         }
     }
@@ -500,41 +558,63 @@ fn analyze_smart(dev: &str, text: &str) -> Vec<Finding> {
     }
 
     if !judged && f.is_empty() {
-        f.push(Finding::new(Sev::Info, "SMART data was read but gave no health verdict."));
+        f.push(Finding::new(
+            Sev::Info,
+            "SMART data was read but gave no health verdict.",
+        ));
     }
     if f.iter().all(|x| x.sev <= Sev::Info) && judged {
-        f.push(Finding::new(Sev::Ok, "No warning signs in the SMART attributes."));
+        f.push(Finding::new(
+            Sev::Ok,
+            "No warning signs in the SMART attributes.",
+        ));
     }
     f.push(self_test_repairs(dev));
     f
 }
 
-fn analyze_nvme(_dev: &str, text: &str) -> Vec<Finding> {
+fn analyze_nvme(text: &str) -> Vec<Finding> {
     let mut f = vec![];
     let num = |k: &str| kv(text, k).map(|s| leading_num(&s));
     match kv(text, "Critical Warning:") {
-        Some(w) if w.trim_start_matches("0x").trim_start_matches('0').is_empty() => {
+        Some(w)
+            if w.trim_start_matches("0x")
+                .trim_start_matches('0')
+                .is_empty() =>
+        {
             f.push(Finding::new(Sev::Ok, "No critical warnings."));
         }
         Some(w) => f.push(
-            Finding::new(Sev::Bad, format!("The drive raised a critical warning ({w})."))
-                .advice("Spare capacity, temperature, reliability or read-only mode: back up now."),
+            Finding::new(
+                Sev::Bad,
+                format!("The drive raised a critical warning ({w})."),
+            )
+            .advice("Spare capacity, temperature, reliability or read-only mode: back up now."),
         ),
         None => {}
     }
     if let Some(used) = num("Percentage Used:") {
         if used >= 100 {
-            f.push(Finding::new(Sev::Bad, "The SSD has passed its rated endurance.").advice("Replace it soon."));
+            f.push(
+                Finding::new(Sev::Bad, "The SSD has passed its rated endurance.")
+                    .advice("Replace it soon."),
+            );
         } else if used >= 90 {
-            f.push(Finding::new(Sev::Warn, format!("The SSD has used {used}% of its rated endurance.")));
+            f.push(Finding::new(
+                Sev::Warn,
+                format!("The SSD has used {used}% of its rated endurance."),
+            ));
         }
     }
     if let (Some(spare), Some(th)) = (num("Available Spare:"), num("Available Spare Threshold:"))
         && spare < th
     {
         f.push(
-            Finding::new(Sev::Bad, format!("Spare capacity ({spare}%) is below the drive's threshold ({th}%)."))
-                .advice("Back up and replace the drive."),
+            Finding::new(
+                Sev::Bad,
+                format!("Spare capacity ({spare}%) is below the drive's threshold ({th}%)."),
+            )
+            .advice("Back up and replace the drive."),
         );
     }
     if let Some(n) = num("Media and Data Integrity Errors:")
@@ -548,10 +628,16 @@ fn analyze_nvme(_dev: &str, text: &str) -> Vec<Finding> {
     if let Some(t) = num("Temperature:")
         && t >= 70
     {
-        f.push(Finding::new(Sev::Warn, format!("The drive is hot: {t} °C.")).advice("Check airflow, or add a heatsink."));
+        f.push(
+            Finding::new(Sev::Warn, format!("The drive is hot: {t} °C."))
+                .advice("Check airflow, or add a heatsink."),
+        );
     }
     if f.iter().all(|x| x.sev <= Sev::Ok) {
-        f.push(Finding::new(Sev::Ok, "No warning signs in the NVMe health log."));
+        f.push(Finding::new(
+            Sev::Ok,
+            "No warning signs in the NVMe health log.",
+        ));
     }
     f
 }
@@ -568,13 +654,21 @@ fn boot_check_repairs(ctx: &Ctx) -> Vec<Repair> {
         root_repair(
             "Check at the next boot",
             "Adds `fsck.mode=force fsck.repair=yes` to every kernel's command line, so the next boot checks and repairs this filesystem before mounting it. Reboot to start it. Afterwards, use \"Stop forcing a check\" so later boots are not slowed down.",
-            vec![v(&["grubby", "--update-kernel=ALL", "--args=fsck.mode=force fsck.repair=yes"])],
+            vec![v(&[
+                "grubby",
+                "--update-kernel=ALL",
+                "--args=fsck.mode=force fsck.repair=yes",
+            ])],
             false,
         ),
         root_repair(
             "Stop forcing a check",
             "Removes `fsck.mode=force fsck.repair=yes` from every kernel's command line again.",
-            vec![v(&["grubby", "--update-kernel=ALL", "--remove-args=fsck.mode=force fsck.repair=yes"])],
+            vec![v(&[
+                "grubby",
+                "--update-kernel=ALL",
+                "--remove-args=fsck.mode=force fsck.repair=yes",
+            ])],
             false,
         ),
     ]
@@ -584,23 +678,34 @@ const SYSTEM_FS_ADVICE: &str = "This filesystem is in use by the running system 
 
 fn analyze_ext(fs: &Fs, ctx: &Ctx, out: Option<&(String, Option<i32>)>) -> Vec<Finding> {
     let mut f = vec![];
-    let text = out.map(|o| o.0.as_str()).unwrap_or("");
+    let text = out.map_or("", |o| o.0.as_str());
     let mounted = fs.mountpoint.is_some();
     let journaled = kv(text, "Filesystem features:").is_some_and(|x| x.contains("has_journal"));
     let state = kv(text, "Filesystem state:").unwrap_or_default();
-    let errors = kv(text, "FS Error count:").map(|s| leading_num(&s)).unwrap_or(0);
+    let errors = kv(text, "FS Error count:").map_or(0, |s| leading_num(&s));
     let mut dirty = false;
     if text.trim().is_empty() {
-        f.push(Finding::new(Sev::Info, "The superblock could not be read (administrator access or tune2fs is missing)."));
+        f.push(Finding::new(
+            Sev::Info,
+            "The superblock could not be read (administrator access or tune2fs is missing).",
+        ));
     } else if errors > 0 {
         dirty = true;
         f.push(
-            Finding::new(Sev::Bad, format!("The kernel has recorded {errors} filesystem error(s)."))
-                .advice("Run a check. The record is cleared once a repair completes."),
+            Finding::new(
+                Sev::Bad,
+                format!("The kernel has recorded {errors} filesystem error(s)."),
+            )
+            .advice("Run a check. The record is cleared once a repair completes."),
         );
-    } else if state.contains("with errors") || (state.contains("not clean") && (journaled || !mounted)) {
+    } else if state.contains("with errors")
+        || (state.contains("not clean") && (journaled || !mounted))
+    {
         dirty = true;
-        f.push(Finding::new(Sev::Bad, format!("The filesystem is marked \"{state}\".")).advice("It was not unmounted cleanly or has detected damage. Run a check."));
+        f.push(
+            Finding::new(Sev::Bad, format!("The filesystem is marked \"{state}\"."))
+                .advice("It was not unmounted cleanly or has detected damage. Run a check."),
+        );
     } else if state.contains("not clean") {
         // A mounted ext2 (no journal) is always flagged this way while in use.
         f.push(Finding::new(
@@ -609,12 +714,22 @@ fn analyze_ext(fs: &Fs, ctx: &Ctx, out: Option<&(String, Option<i32>)>) -> Vec<F
         ));
     } else if !state.is_empty() {
         let last = kv(text, "Last checked:").unwrap_or_default();
-        f.push(Finding::new(Sev::Ok, format!("Marked clean (last full check: {last}).")));
+        f.push(Finding::new(
+            Sev::Ok,
+            format!("Marked clean (last full check: {last})."),
+        ));
     }
 
     let dev = fs.dev.as_str();
     let warn = drive_warning(ctx);
-    let mut check = Finding::new(Sev::Info, if dirty { "Repair options" } else { "Full check" });
+    let mut check = Finding::new(
+        Sev::Info,
+        if dirty {
+            "Repair options"
+        } else {
+            "Full check"
+        },
+    );
     let mut any = false;
     if let Some((cmds, steps)) = on_unmounted(fs, ctx, v(&["e2fsck", "-fn", dev]), None) {
         check = check.repair(root_repair("Check only (read-only)", format!("Runs `e2fsck -fn`: reports problems and changes nothing. {steps} The result appears in the Activity log."), cmds, false));
@@ -629,10 +744,10 @@ fn analyze_ext(fs: &Fs, ctx: &Ctx, out: Option<&(String, Option<i32>)>) -> Vec<F
             check = check.repair(r);
             any = true;
         }
-        if !any {
-            check = check.advice(SYSTEM_FS_ADVICE);
-        } else {
+        if any {
             check = check.advice("This filesystem is in use. It can be checked while the system is off: schedule it for the next boot, or use a live USB.");
+        } else {
+            check = check.advice(SYSTEM_FS_ADVICE);
         }
     }
     f.push(check);
@@ -642,7 +757,10 @@ fn analyze_ext(fs: &Fs, ctx: &Ctx, out: Option<&(String, Option<i32>)>) -> Vec<F
 fn analyze_xfs(fs: &Fs, ctx: &Ctx) -> Vec<Finding> {
     let dev = fs.dev.as_str();
     let warn = drive_warning(ctx);
-    let mut f = Finding::new(Sev::Info, "XFS keeps no error history to read: run a check to find out.");
+    let mut f = Finding::new(
+        Sev::Info,
+        "XFS keeps no error history to read: run a check to find out.",
+    );
     let mut any = false;
     if let Some(mp) = &fs.mountpoint
         && have("xfs_scrub")
@@ -653,7 +771,12 @@ fn analyze_xfs(fs: &Fs, ctx: &Ctx) -> Vec<Finding> {
         any = true;
     }
     if let Some((cmds, steps)) = on_unmounted(fs, ctx, v(&["xfs_repair", "-n", dev]), None) {
-        f = f.repair(root_repair("Check only (xfs_repair -n)", format!("Reports problems and changes nothing. {steps}"), cmds, false));
+        f = f.repair(root_repair(
+            "Check only (xfs_repair -n)",
+            format!("Reports problems and changes nothing. {steps}"),
+            cmds,
+            false,
+        ));
         any = true;
     }
     if let Some((cmds, steps)) = on_unmounted(fs, ctx, v(&["xfs_repair", dev]), Some("0")) {
@@ -686,14 +809,24 @@ fn analyze_btrfs(fs: &Fs, ctx: &Ctx, out: Option<&(String, Option<i32>)>) -> Vec
             .repair(root_repair("Check only (read-only)", "Runs `btrfs check --readonly`: changes nothing.", vec![v(&["btrfs", "check", "--readonly", dev])], false))];
     };
     let mut f = vec![];
-    let text = out.map(|o| o.0.as_str()).unwrap_or("");
+    let text = out.map_or("", |o| o.0.as_str());
     let errs = btrfs_errors(text);
     if text.trim().is_empty() {
-        f.push(Finding::new(Sev::Info, "Device error counters could not be read."));
+        f.push(Finding::new(
+            Sev::Info,
+            "Device error counters could not be read.",
+        ));
     } else if errs.is_empty() {
-        f.push(Finding::new(Sev::Ok, "No read, write or corruption errors are recorded."));
+        f.push(Finding::new(
+            Sev::Ok,
+            "No read, write or corruption errors are recorded.",
+        ));
     } else {
-        let list = errs.iter().map(|(k, n)| format!("{k} = {n}")).collect::<Vec<_>>().join(", ");
+        let list = errs
+            .iter()
+            .map(|(k, n)| format!("{k} = {n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         f.push(
             Finding::new(Sev::Bad, format!("Error counters are non-zero: {list}"))
                 .advice("Scrub to read everything and repair from a good copy where the data is duplicated (RAID1/DUP; with a single copy it can only report). Reset the counters afterwards so new errors stand out.")
@@ -721,11 +854,14 @@ fn analyze_btrfs(fs: &Fs, ctx: &Ctx, out: Option<&(String, Option<i32>)>) -> Vec
 fn analyze_fat(fs: &Fs, ctx: &Ctx, out: Option<&(String, Option<i32>)>) -> Vec<Finding> {
     let dev = fs.dev.as_str();
     let warn = drive_warning(ctx);
-    let text = out.map(|o| o.0.as_str()).unwrap_or("");
+    let text = out.map_or("", |o| o.0.as_str());
     let code = out.and_then(|o| o.1).unwrap_or(0);
     let mut f = Finding::new(Sev::Ok, "No problems found.");
-    if out.is_none() || text.trim().is_empty() && code != 0 {
-        f = Finding::new(Sev::Info, "Not checked (fsck.fat or administrator access is missing).");
+    if out.is_none() || (text.trim().is_empty() && code != 0) {
+        f = Finding::new(
+            Sev::Info,
+            "Not checked (fsck.fat or administrator access is missing).",
+        );
     } else if text.contains("Dirty bit is set") && code == 0 {
         f = Finding::new(Sev::Warn, "Marked dirty: it was not unmounted cleanly.");
     } else if code != 0 {
@@ -733,7 +869,14 @@ fn analyze_fat(fs: &Fs, ctx: &Ctx, out: Option<&(String, Option<i32>)>) -> Vec<F
             .advice("Checked while mounted, a FAT filesystem can show harmless differences; repair from an unmounted state.");
     }
     if let Some((cmds, steps)) = on_unmounted(fs, ctx, v(&["fsck.fat", "-a", dev]), Some("0|1")) {
-        f = f.repair(root_repair("Repair (fsck.fat -a)", format!("Fixes inconsistencies automatically; changes only what it must. {steps}{warn}"), cmds, true));
+        f = f.repair(root_repair(
+            "Repair (fsck.fat -a)",
+            format!(
+                "Fixes inconsistencies automatically; changes only what it must. {steps}{warn}"
+            ),
+            cmds,
+            true,
+        ));
     } else {
         f = f.advice(SYSTEM_FS_ADVICE);
     }
@@ -765,12 +908,18 @@ fn analyze_fs(fs: &Fs, ctx: &Ctx, out: Option<&(String, Option<i32>)>) -> Item {
         );
     }
     findings.sort_by_key(|f| std::cmp::Reverse(f.sev));
-    let name = if fs.label.is_empty() { fs.size.clone() } else { format!("{} · {}", fs.label, fs.size) };
+    let name = if fs.label.is_empty() {
+        fs.size.clone()
+    } else {
+        format!("{} · {}", fs.label, fs.size)
+    };
     Item {
         title: format!("{} ({})", fs.dev, fs.fstype),
         subtitle: format!(
             "{name} · {}",
-            fs.mountpoint.as_deref().map_or("not mounted".to_string(), |m| format!("mounted at {m}"))
+            fs.mountpoint
+                .as_deref()
+                .map_or("not mounted".to_string(), |m| format!("mounted at {m}"))
         ),
         findings,
         raw: out.map(|o| o.0.clone()).unwrap_or_default(),
@@ -816,12 +965,14 @@ fn fstab_findings(text: &str) -> Vec<Finding> {
         let mut f = Finding::new(sev, format!("{target}: {msg}"));
         let low = msg.to_lowercase();
         if low.contains("target does not exist") {
-            f = f.advice("The folder this entry mounts onto is missing.").repair(root_repair(
-                "Create the folder",
-                format!("Runs `mkdir -p {target}`."),
-                vec![v(&["mkdir", "-p", &target])],
-                false,
-            ));
+            f = f
+                .advice("The folder this entry mounts onto is missing.")
+                .repair(root_repair(
+                    "Create the folder",
+                    format!("Runs `mkdir -p {target}`."),
+                    vec![v(&["mkdir", "-p", &target])],
+                    false,
+                ));
         } else if low.contains("systemd still uses the old version") {
             f = f.repair(root_repair(
                 "Reload systemd",
@@ -830,8 +981,17 @@ fn fstab_findings(text: &str) -> Vec<Finding> {
                 false,
             ));
         } else if low.contains("unreachable") {
+            // awk's -v and fstab's \040 escapes make names with spaces or backslashes unsafe to match.
+            if target.contains(|c: char| c.is_whitespace() || c == '\\') {
+                f = f.advice(
+                    "The device this entry refers to is missing. Edit /etc/fstab by hand and add `nofail` to the line (make a copy first).",
+                );
+                out.push(f);
+                continue;
+            }
+            // Never write over /etc/fstab directly: build the new file beside it, check it, then rename.
             let script = format!(
-                "cp -p /etc/fstab /etc/fstab.linuxward.bak && awk -v t={} '$0 !~ /^[ \\t]*#/ && $2 == t && $4 !~ /nofail/ {{ $4 = $4 \",nofail\" }} {{ print }}' /etc/fstab.linuxward.bak > /etc/fstab",
+                "cp -p /etc/fstab /etc/fstab.linuxward.bak && awk -v t={} '$0 !~ /^[ \\t]*#/ && $2 == t && $4 !~ /nofail/ {{ $4 = $4 \",nofail\" }} {{ print }}' /etc/fstab.linuxward.bak > /etc/fstab.linuxward.new && test -s /etc/fstab.linuxward.new && chmod --reference=/etc/fstab /etc/fstab.linuxward.new && mv /etc/fstab.linuxward.new /etc/fstab",
                 util::sh_quote(&target)
             );
             f = f
@@ -879,13 +1039,26 @@ fn is_storage_error(line: &str) -> bool {
 fn kernel_findings(text: &str) -> Vec<Finding> {
     let lines: Vec<&str> = text.lines().filter(|l| is_storage_error(l)).collect();
     if lines.is_empty() {
-        return vec![Finding::new(Sev::Ok, "No disk or filesystem errors in the kernel log since boot.")];
+        return vec![Finding::new(
+            Sev::Ok,
+            "No disk or filesystem errors in the kernel log since boot.",
+        )];
     }
     let serious = lines.iter().any(|l| {
         let l = l.to_lowercase();
-        l.contains("remounting filesystem read-only") || l.contains("i/o error") || l.contains("blk_update_request") || l.contains("medium error")
+        l.contains("remounting filesystem read-only")
+            || l.contains("i/o error")
+            || l.contains("blk_update_request")
+            || l.contains("medium error")
     });
-    let recent = lines.iter().rev().take(5).rev().copied().collect::<Vec<_>>().join("\n");
+    let recent = lines
+        .iter()
+        .rev()
+        .take(5)
+        .rev()
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
     vec![Finding::new(
         if serious { Sev::Bad } else { Sev::Warn },
         format!("{} disk or filesystem message(s) at error level since boot. Most recent:\n{recent}", lines.len()),
@@ -937,7 +1110,10 @@ pub fn scan() -> Report {
             }
             "btrfs" if have("btrfs") => {
                 if let Some(mp) = &fs.mountpoint {
-                    cmds.push((format!("fs:{}", fs.dev), v(&["btrfs", "device", "stats", mp])));
+                    cmds.push((
+                        format!("fs:{}", fs.dev),
+                        v(&["btrfs", "device", "stats", mp]),
+                    ));
                 }
             }
             "vfat" if have("fsck.fat") => {
@@ -964,7 +1140,13 @@ pub fn scan() -> Report {
             "Administrator access was not granted{}. SMART data and filesystem details need it; only the checks that don't are shown.",
             if why.is_empty() { String::new() } else { format!(" ({why})") }
         ));
-        let k = util::run(&kernel_cmd[0], &kernel_cmd[1..].iter().map(String::as_str).collect::<Vec<_>>());
+        let k = util::run(
+            &kernel_cmd[0],
+            &kernel_cmd[1..]
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        );
         results.insert("kernel".into(), (k.stdout, None));
     }
     if !have("smartctl") && !drives.is_empty() {
@@ -972,8 +1154,14 @@ pub fn scan() -> Report {
     }
 
     let mut ctx = Ctx {
-        fstab: mount_table(&std::fs::read_to_string("/etc/fstab").unwrap_or_default(), 3),
-        mounts: mount_table(&std::fs::read_to_string("/proc/self/mounts").unwrap_or_default(), 3),
+        fstab: mount_table(
+            &std::fs::read_to_string("/etc/fstab").unwrap_or_default(),
+            3,
+        ),
+        mounts: mount_table(
+            &std::fs::read_to_string("/proc/self/mounts").unwrap_or_default(),
+            3,
+        ),
         drive_bad: false,
         grubby: have("grubby"),
     };
@@ -982,9 +1170,12 @@ pub fn scan() -> Report {
         .iter()
         .map(|d| {
             let res = results.get(&format!("smart:{}", d.dev));
-            let text = res.map(|r| r.0.as_str()).unwrap_or("");
+            let text = res.map_or("", |r| r.0.as_str());
             let mut findings = if !elevated {
-                vec![Finding::new(Sev::Info, "Needs administrator access to read SMART data.")]
+                vec![Finding::new(
+                    Sev::Info,
+                    "Needs administrator access to read SMART data.",
+                )]
             } else if !have("smartctl") {
                 vec![Finding::new(Sev::Info, "smartmontools is not installed.")]
             } else {
@@ -1007,21 +1198,32 @@ pub fn scan() -> Report {
 
     let fs_items = filesystems
         .iter()
-        .map(|fs| analyze_fs(fs, &ctx, results.get(&format!("fs:{}", fs.dev)).filter(|_| elevated)))
+        .map(|fs| {
+            analyze_fs(
+                fs,
+                &ctx,
+                results.get(&format!("fs:{}", fs.dev)).filter(|_| elevated),
+            )
+        })
         .collect();
 
     let verify = util::run("findmnt", &["--verify"]);
     let mounts = Item {
         title: "/etc/fstab".into(),
         subtitle: "Mount configuration read at boot".into(),
-        findings: if verify.stdout.is_empty() && verify.stderr.contains("not found") || !have("findmnt") {
+        findings: if (verify.stdout.is_empty() && verify.stderr.contains("not found"))
+            || !have("findmnt")
+        {
             vec![Finding::new(Sev::Info, "findmnt is not available.")]
         } else {
             fstab_findings(&verify.combined())
         },
         raw: verify.combined(),
     };
-    let ktext = results.get("kernel").map(|r| r.0.clone()).unwrap_or_default();
+    let ktext = results
+        .get("kernel")
+        .map(|r| r.0.clone())
+        .unwrap_or_default();
     let kernel = Item {
         title: "Kernel log".into(),
         subtitle: "Storage errors since this boot".into(),
@@ -1066,12 +1268,21 @@ Num  Test_Description    Status                  Remaining  LifeTime(hours)  LBA
     #[test]
     fn ata_attributes_are_judged() {
         let f = analyze_smart("/dev/sda", ATA);
-        assert_eq!(find(&f, "8 sector(s) have been reallocated").unwrap().sev, Sev::Warn);
+        assert_eq!(
+            find(&f, "8 sector(s) have been reallocated").unwrap().sev,
+            Sev::Warn
+        );
         assert_eq!(find(&f, "3 sector(s) can't be read").unwrap().sev, Sev::Bad);
         assert_eq!(find(&f, "self-test failed").unwrap().sev, Sev::Bad);
-        assert!(find(&f, "CRC").is_none(), "zero CRC errors are not a finding");
+        assert!(
+            find(&f, "CRC").is_none(),
+            "zero CRC errors are not a finding"
+        );
         assert!(find(&f, "hot").is_none());
-        assert!(f.iter().any(|x| x.repairs.len() == 2), "self-test repairs offered");
+        assert!(
+            f.iter().any(|x| x.repairs.len() == 2),
+            "self-test repairs offered"
+        );
     }
 
     #[test]
@@ -1085,14 +1296,20 @@ Num  Test_Description    Status                  Remaining  LifeTime(hours)  LBA
 
     #[test]
     fn virtual_disk_is_info_not_error() {
-        let f = analyze_smart("/dev/vda", "SMART support is: Unavailable - device lacks SMART capability.\n");
+        let f = analyze_smart(
+            "/dev/vda",
+            "SMART support is: Unavailable - device lacks SMART capability.\n",
+        );
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].sev, Sev::Info);
     }
 
     #[test]
     fn smart_off_offers_to_switch_on() {
-        let f = analyze_smart("/dev/sdb", "SMART support is: Disabled\nSMART overall-health self-assessment test result: PASSED\n");
+        let f = analyze_smart(
+            "/dev/sdb",
+            "SMART support is: Disabled\nSMART overall-health self-assessment test result: PASSED\n",
+        );
         let w = f.iter().find(|x| x.text.contains("switched off")).unwrap();
         assert_eq!(w.repairs.len(), 1);
     }
@@ -1103,13 +1320,17 @@ Num  Test_Description    Status                  Remaining  LifeTime(hours)  LBA
         let f = analyze_smart("/dev/nvme0n1", &format!("NVMe\n{t}"));
         assert_eq!(find(&f, "Spare capacity").unwrap().sev, Sev::Bad);
         assert_eq!(find(&f, "integrity").unwrap().sev, Sev::Bad);
-        let ok = analyze_nvme("/dev/nvme0n1", "Critical Warning: 0x00\nPercentage Used: 3%\nMedia and Data Integrity Errors: 0\nTemperature: 35 Celsius\n");
+        let ok = analyze_nvme(
+            "Critical Warning: 0x00\nPercentage Used: 3%\nMedia and Data Integrity Errors: 0\nTemperature: 35 Celsius\n",
+        );
         assert!(ok.iter().all(|x| x.sev == Sev::Ok));
     }
 
     #[test]
     fn lsblk_pairs_parse() {
-        let m = parse_pairs(r#"PATH="/dev/sda1" TYPE="part" FSTYPE="ext4" LABEL="My\x20Disk" MOUNTPOINT="" SIZE="1G""#);
+        let m = parse_pairs(
+            r#"PATH="/dev/sda1" TYPE="part" FSTYPE="ext4" LABEL="My\x20Disk" MOUNTPOINT="" SIZE="1G""#,
+        );
         assert_eq!(m["LABEL"], "My Disk");
         assert_eq!(m["MOUNTPOINT"], "");
         assert_eq!(m["PATH"], "/dev/sda1");
@@ -1131,29 +1352,69 @@ Num  Test_Description    Status                  Remaining  LifeTime(hours)  LBA
     }
 
     fn fs(dev: &str, ty: &str, mp: Option<&str>) -> Fs {
-        Fs { dev: dev.into(), fstype: ty.into(), label: String::new(), size: "1G".into(), mountpoint: mp.map(Into::into) }
+        Fs {
+            dev: dev.into(),
+            fstype: ty.into(),
+            label: String::new(),
+            size: "1G".into(),
+            mountpoint: mp.map(Into::into),
+        }
     }
     fn ctx() -> Ctx {
-        Ctx { fstab: [("/data".to_string(), "defaults".to_string())].into(), mounts: HashMap::new(), drive_bad: false, grubby: false }
+        Ctx {
+            fstab: [("/data".to_string(), "defaults".to_string())].into(),
+            mounts: HashMap::new(),
+            drive_bad: false,
+            grubby: false,
+        }
     }
 
     #[test]
     fn unmounted_runs_directly_mounted_wraps_and_system_refuses() {
         let c = ctx();
-        let (cmds, _) = on_unmounted(&fs("/dev/sdb1", "ext4", None), &c, v(&["e2fsck", "-fy", "/dev/sdb1"]), None).unwrap();
+        let (cmds, _) = on_unmounted(
+            &fs("/dev/sdb1", "ext4", None),
+            &c,
+            v(&["e2fsck", "-fy", "/dev/sdb1"]),
+            None,
+        )
+        .unwrap();
         assert_eq!(cmds, vec![v(&["e2fsck", "-fy", "/dev/sdb1"])]);
 
-        let (cmds, _) = on_unmounted(&fs("/dev/sdb1", "ext4", Some("/data")), &c, v(&["e2fsck", "-fy", "/dev/sdb1"]), Some("0|1|2")).unwrap();
+        let (cmds, _) = on_unmounted(
+            &fs("/dev/sdb1", "ext4", Some("/data")),
+            &c,
+            v(&["e2fsck", "-fy", "/dev/sdb1"]),
+            Some("0|1|2"),
+        )
+        .unwrap();
         let script = &cmds[0][2];
         assert!(script.starts_with("umount /data || {"), "{script}");
         assert!(script.contains("e2fsck -fy /dev/sdb1; rc=$?"));
-        assert!(script.contains("0|1|2) mount /data"), "remounts only on success");
-        assert!(on_unmounted(&fs("/dev/sda2", "ext4", Some("/")), &c, v(&["e2fsck"]), None).is_none());
+        assert!(
+            script.contains("0|1|2) mount /data"),
+            "remounts only on success"
+        );
+        assert!(
+            on_unmounted(
+                &fs("/dev/sda2", "ext4", Some("/")),
+                &c,
+                v(&["e2fsck"]),
+                None
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn mount_point_with_spaces_is_quoted() {
-        let (cmds, _) = on_unmounted(&fs("/dev/sdb1", "vfat", Some("/run/media/me/My Disk")), &ctx(), v(&["fsck.fat", "-a", "/dev/sdb1"]), Some("0|1")).unwrap();
+        let (cmds, _) = on_unmounted(
+            &fs("/dev/sdb1", "vfat", Some("/run/media/me/My Disk")),
+            &ctx(),
+            v(&["fsck.fat", "-a", "/dev/sdb1"]),
+            Some("0|1"),
+        )
+        .unwrap();
         assert!(cmds[0][2].contains("umount '/run/media/me/My Disk'"));
     }
 
@@ -1162,37 +1423,71 @@ Num  Test_Description    Status                  Remaining  LifeTime(hours)  LBA
         let dirty = ("Filesystem features:      has_journal ext_attr\nFilesystem state:         not clean\nFS Error count:           3\n".to_string(), None);
         let f = analyze_ext(&fs("/dev/sdb1", "ext4", None), &ctx(), Some(&dirty));
         assert_eq!(f[0].sev, Sev::Bad);
-        let repair = f.iter().flat_map(|x| &x.repairs).find(|r| r.label.starts_with("Repair")).unwrap();
+        let repair = f
+            .iter()
+            .flat_map(|x| &x.repairs)
+            .find(|r| r.label.starts_with("Repair"))
+            .unwrap();
         assert!(repair.risky);
 
         let clean = ("Filesystem features:      has_journal\nFilesystem state:         clean\nLast checked:             Mon Jan  1 00:00:00 2024\n".to_string(), None);
-        let f = analyze_ext(&fs("/dev/sdb1", "ext4", Some("/data")), &ctx(), Some(&clean));
+        let f = analyze_ext(
+            &fs("/dev/sdb1", "ext4", Some("/data")),
+            &ctx(),
+            Some(&clean),
+        );
         assert_eq!(f[0].sev, Sev::Ok);
 
         // A mounted journal-less ext2 always shows "not clean": not a finding.
-        let ext2 = ("Filesystem features:      ext_attr\nFilesystem state:         not clean\n".to_string(), None);
-        assert_eq!(analyze_ext(&fs("/dev/sdb1", "ext2", Some("/data")), &ctx(), Some(&ext2))[0].sev, Sev::Info);
+        let ext2 = (
+            "Filesystem features:      ext_attr\nFilesystem state:         not clean\n".to_string(),
+            None,
+        );
+        assert_eq!(
+            analyze_ext(&fs("/dev/sdb1", "ext2", Some("/data")), &ctx(), Some(&ext2))[0].sev,
+            Sev::Info
+        );
     }
 
     #[test]
     fn mounted_root_gets_boot_time_check_only_with_grubby() {
         let mut c = ctx();
-        let clean = ("Filesystem features:      has_journal\nFilesystem state:         clean with errors\n".to_string(), None);
+        let clean = (
+            "Filesystem features:      has_journal\nFilesystem state:         clean with errors\n"
+                .to_string(),
+            None,
+        );
         let root = fs("/dev/sda2", "ext4", Some("/"));
-        let none: Vec<_> = analyze_ext(&root, &c, Some(&clean)).iter().flat_map(|f| f.repairs.clone()).collect();
+        let none: Vec<_> = analyze_ext(&root, &c, Some(&clean))
+            .iter()
+            .flat_map(|f| f.repairs.clone())
+            .collect();
         assert!(none.is_empty());
         c.grubby = true;
-        let some: Vec<_> = analyze_ext(&root, &c, Some(&clean)).iter().flat_map(|f| f.repairs.clone()).collect();
+        let some: Vec<_> = analyze_ext(&root, &c, Some(&clean))
+            .iter()
+            .flat_map(|f| f.repairs.clone())
+            .collect();
         assert_eq!(some.len(), 2);
     }
 
     #[test]
     fn btrfs_counters() {
         let t = "[/dev/sda2].write_io_errs    0\n[/dev/sda2].read_io_errs     0\n[/dev/sda2].corruption_errs  4\n";
-        assert_eq!(btrfs_errors(t), vec![("[/dev/sda2].corruption_errs".to_string(), 4)]);
-        let f = analyze_btrfs(&fs("/dev/sda2", "btrfs", Some("/")), &ctx(), Some(&(t.to_string(), None)));
+        assert_eq!(
+            btrfs_errors(t),
+            vec![("[/dev/sda2].corruption_errs".to_string(), 4)]
+        );
+        let f = analyze_btrfs(
+            &fs("/dev/sda2", "btrfs", Some("/")),
+            &ctx(),
+            Some(&(t.to_string(), None)),
+        );
         assert_eq!(f[0].sev, Sev::Bad);
-        assert!(f.iter().any(|x| x.repairs.iter().any(|r| r.label.starts_with("Scrub"))));
+        assert!(
+            f.iter()
+                .any(|x| x.repairs.iter().any(|r| r.label.starts_with("Scrub")))
+        );
     }
 
     #[test]
@@ -1213,7 +1508,10 @@ Num  Test_Description    Status                  Remaining  LifeTime(hours)  LBA
         assert!(f[0].repairs[0].label.contains("nofail"));
         assert!(f[1].repairs[0].label.contains("Create the folder"));
         assert!(f[2].repairs[0].label.contains("Reload"));
-        assert_eq!(fstab_findings("Success, no errors or warnings detected\n")[0].sev, Sev::Ok);
+        assert_eq!(
+            fstab_findings("Success, no errors or warnings detected\n")[0].sev,
+            Sev::Ok
+        );
     }
 
     #[test]
@@ -1225,9 +1523,89 @@ Num  Test_Description    Status                  Remaining  LifeTime(hours)  LBA
         assert!(f[0].text.starts_with("2 disk"));
     }
 
+    /// The repair scripts run as root: at least make sure the shell can parse every one of them.
+    #[test]
+    fn generated_scripts_are_valid_shell() {
+        let c = ctx();
+        let mut scripts = vec![];
+        for (mp, codes) in [
+            ("/data", None),
+            ("/data", Some("0|1|2")),
+            ("/run/media/me/My Disk", Some("0")),
+        ] {
+            let fs = fs("/dev/sdb1", "ext4", Some(mp));
+            let (cmds, _) = on_unmounted(&fs, &c, v(&["e2fsck", "-fy", &fs.dev]), codes).unwrap();
+            scripts.push(cmds[0][2].clone());
+        }
+        let t = "/mnt/gone\n   [E] unreachable on boot required source: UUID=1234\n";
+        for f in fstab_findings(t) {
+            for r in f.repairs {
+                if let Action::Root(cmds) = &r.actions[0]
+                    && cmds[0][0] == "sh"
+                {
+                    scripts.push(cmds[0][2].clone());
+                }
+            }
+        }
+        assert!(scripts.len() >= 4);
+        for s in scripts {
+            let out = std::process::Command::new("sh")
+                .args(["-n", "-c", &s])
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "invalid shell: {s}\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn fstab_edit_adds_nofail_without_touching_other_lines() {
+        let t = "/mnt/gone\n   [E] unreachable on boot required source: UUID=1234\n";
+        let f = fstab_findings(t);
+        let Action::Root(cmds) = &f[0].repairs[0].actions[0] else {
+            panic!("root action")
+        };
+        let script = &cmds[0][2];
+        assert!(
+            script.contains("mv /etc/fstab.linuxward.new /etc/fstab"),
+            "{script}"
+        );
+        assert!(
+            !script.contains("> /etc/fstab;") && !script.ends_with("> /etc/fstab"),
+            "must not truncate fstab in place"
+        );
+        // Run just the awk part against a sample file.
+        let dir = std::env::temp_dir().join(format!("lw-fstab-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("fstab");
+        std::fs::write(&src, "# comment /mnt/gone\nUUID=1 / ext4 defaults 0 1\nUUID=2 /mnt/gone ext4 defaults 0 2\nUUID=3 /mnt/other ext4 defaults 0 2\n").unwrap();
+        // The awk program itself contains `&&`, so cut the command out by its markers.
+        let start = script.find("awk -v").unwrap();
+        let end = script.find(" > /etc/fstab.linuxward.new").unwrap();
+        let awk = script[start..end].replace("/etc/fstab.linuxward.bak", src.to_str().unwrap());
+        let out = std::process::Command::new("sh")
+            .args(["-c", &awk])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("UUID=2 /mnt/gone ext4 defaults,nofail 0 2"),
+            "{text}"
+        );
+        assert!(text.contains("UUID=3 /mnt/other ext4 defaults 0 2"));
+        assert!(text.contains("# comment /mnt/gone"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn privileged_output_splits_back_into_sections() {
-        let cmds = vec![v(&["smartctl", "-a", "/dev/sda"]), v(&["tune2fs", "-l", "/dev/sda1"])];
+        let cmds = vec![
+            v(&["smartctl", "-a", "/dev/sda"]),
+            v(&["tune2fs", "-l", "/dev/sda1"]),
+        ];
         let out = "# smartctl -a /dev/sda\nline one\n!! command failed with exit code 4\n# tune2fs -l /dev/sda1\nstate clean\n";
         let s = split_sections(out, &cmds);
         assert_eq!(s[0], ("line one\n".to_string(), Some(4)));

@@ -1,7 +1,10 @@
 //! The Services tab: every running service, what it does, and a link to its configuration.
 
 use super::perf_ui::{AMBER, BLUE, GREEN};
-use super::*;
+use super::{
+    Align, App, Column, Confirm, Layout, Msg, RichText, TableBuilder, egui, field_width, human,
+    util,
+};
 use crate::services::{self, Detail, Scope, Svc};
 use crate::targets::Action;
 

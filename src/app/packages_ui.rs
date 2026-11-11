@@ -1,6 +1,15 @@
 //! The Packages tab: browse, upgrade and remove installed packages.
 
-use super::*;
+use super::{
+    Align, App, Category, Color32, Column, Confirm, HashMap, HashSet, Layout, Msg, PkgView, Pm,
+    RichText, Row, SortBy, TableBuilder, egui, field_width, human, pkg, util,
+};
+
+/// One line of the package list: a category header or a package.
+enum ListItem {
+    Head(Category, usize, u64),
+    Pkg(usize),
+}
 
 impl App {
     pub(super) fn start_preview(&mut self, names: Vec<String>) {
@@ -119,7 +128,7 @@ impl App {
             if self.view == PkgView::Unused
                 && ui.add_enabled(n_unused > 0, egui::Button::new("Select all unused").small()).clicked()
             {
-                for r in self.rows.iter_mut() {
+                for r in &mut self.rows {
                     if is_unused(&self.unused, &r.pkg.name) && !pkg::is_protected(&r.pkg.name) {
                         r.selected = true;
                     }
@@ -152,11 +161,7 @@ impl App {
         if self.sort_desc {
             idx.reverse();
         }
-        enum Item {
-            Head(Category, usize, u64),
-            Pkg(usize),
-        }
-        let mut items: Vec<Item> = Vec::with_capacity(idx.len() + 8);
+        let mut items: Vec<ListItem> = Vec::with_capacity(idx.len() + 8);
         if self.group {
             idx.sort_by_key(|&i| pkg::category(&self.rows[i].pkg.name)); // stable: keeps the chosen order inside a group
             let mut totals: HashMap<Category, (usize, u64)> = HashMap::new();
@@ -173,14 +178,14 @@ impl App {
                 if last != Some(c) {
                     last = Some(c);
                     let (n, size) = totals[&c];
-                    items.push(Item::Head(c, n, size));
+                    items.push(ListItem::Head(c, n, size));
                 }
                 if !self.collapsed.contains(&c) {
-                    items.push(Item::Pkg(i));
+                    items.push(ListItem::Pkg(i));
                 }
             }
         } else {
-            items.extend(idx.iter().map(|&i| Item::Pkg(i)));
+            items.extend(idx.iter().map(|&i| ListItem::Pkg(i)));
         }
         let mut toggle: Option<Category> = None;
         let upgrades_known = self.upgradable_known;
@@ -300,8 +305,8 @@ impl App {
             .body(|body| {
                 body.rows(22.0, items.len(), |mut row| {
                     let i = match &items[row.index()] {
-                        Item::Pkg(i) => *i,
-                        Item::Head(c, n, size) => {
+                        ListItem::Pkg(i) => *i,
+                        ListItem::Head(c, n, size) => {
                             let open = !collapsed.contains(c);
                             row.col(|_| {});
                             row.col(|ui| {

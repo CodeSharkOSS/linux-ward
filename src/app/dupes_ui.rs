@@ -1,6 +1,8 @@
 //! The Duplicates tab: find identical files, keep one copy, move the rest to Trash.
 
-use super::*;
+use super::{
+    Align, App, Color32, Confirm, Layout, Msg, PathBuf, RichText, egui, field_width, human, util,
+};
 use crate::dupes::{self, DupGroup};
 
 pub(super) struct DupEntry {
@@ -146,7 +148,7 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                for g in self.dupes.iter_mut() {
+                for g in &mut self.dupes {
                     let head = format!(
                         "{} × {}  ·  {} wasted",
                         g.files.len(),
