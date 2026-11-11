@@ -723,12 +723,8 @@ mod tests {
 
     #[test]
     fn openssh_keys_report_whether_they_have_a_passphrase() {
-        let plain = format!(
-            "\x2d----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAAAAAAAA==\n-----END OPENSSH PRIVATE KEY-----\n"
-        );
-        let locked = format!(
-            "\x2d----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAAAAAAAA==\n-----END OPENSSH PRIVATE KEY-----\n"
-        );
+        let plain = "\x2d----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAAAAAAAA==\n-----END OPENSSH PRIVATE KEY-----\n".to_string();
+        let locked = "\x2d----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAAAAAAAA==\n-----END OPENSSH PRIVATE KEY-----\n".to_string();
         assert_eq!(openssh_unencrypted(&plain), Some(true));
         assert_eq!(openssh_unencrypted(&locked), Some(false));
         assert_eq!(openssh_unencrypted("not a key"), None);

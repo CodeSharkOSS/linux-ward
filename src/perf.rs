@@ -912,6 +912,7 @@ pub fn live_snapshot() -> Live {
     std::thread::sleep(Duration::from_millis(500));
     let b = sample_procs();
     let dt = t0.elapsed().as_secs_f32().max(0.05);
+    // SAFETY: sysconf has no preconditions.
     let (tck, page) = unsafe {
         (
             libc::sysconf(libc::_SC_CLK_TCK).max(1) as f32,

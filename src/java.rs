@@ -545,6 +545,7 @@ fn analyse(
     cpus: usize,
 ) -> JProc {
     let mine = std::fs::metadata(format!("/proc/{}", found.pid))
+        // SAFETY: getuid has no preconditions.
         .map(|m| m.uid() == unsafe { libc::getuid() })
         .unwrap_or(false);
     let exe = std::fs::read_link(format!("/proc/{}/exe", found.pid)).unwrap_or_default();
@@ -704,6 +705,7 @@ pub fn scan(pm: Option<Pm>) -> JavaReport {
     let found = find_jvm_processes();
     let before: Vec<Option<u64>> = found.iter().map(|f| ticks(f.pid)).collect();
     std::thread::sleep(Duration::from_millis(500));
+    // SAFETY: sysconf has no preconditions.
     let tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK).max(1) } as f32;
     let cpu: Vec<f32> = found
         .iter()
@@ -1066,7 +1068,7 @@ mod tests {
     fn flag_advice() {
         let s = flag_sets(16 * GIB, 8, 25);
         assert!(s[1].1.contains("-Xmx4096m") && s[1].1.contains("UseZGC"));
-        assert!(flag_sets(1 * GIB, 1, 21)[0].1.contains("UseSerialGC"));
+        assert!(flag_sets(GIB, 1, 21)[0].1.contains("UseSerialGC"));
     }
 }
 

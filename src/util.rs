@@ -224,6 +224,7 @@ pub fn statvfs(path: &Path) -> Option<(u64, u64)> {
     let c = CString::new(path.as_os_str().as_bytes()).ok()?;
     // SAFETY: statvfs fills the zeroed struct; we check the return code.
     let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c` is a valid NUL-terminated path and `s` is a valid, writable statvfs.
     if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
         return None;
     }

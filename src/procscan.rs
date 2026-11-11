@@ -610,7 +610,7 @@ pub fn scan() -> ScanResult {
     }
 }
 
-/// A process that answers to its /proc/<pid> folder but is missing from the /proc listing is
+/// A process that answers to its `/proc/<pid>` folder but is missing from the /proc listing is
 /// being hidden from tools like `ps`: a classic rootkit trick.
 fn hidden_pids() -> Vec<Suspect> {
     let max: u32 = std::fs::read_to_string("/proc/sys/kernel/pid_max")

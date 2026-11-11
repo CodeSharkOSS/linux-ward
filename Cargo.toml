@@ -2,6 +2,7 @@
 name = "linuxward"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 description = "Linux desktop app to clean up disk space, manage packages, scan for exposed secrets and suspicious processes, and tune performance"
 license = "MPL-2.0"
 repository = "https://github.com/CodeSharkOSS/linux-ward"
