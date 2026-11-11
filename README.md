@@ -151,6 +151,10 @@ then add it to the list in `scan_all`.
 - `pacman -Rns` refuses to remove packages that something else depends on; apt/dnf/zypper may remove dependents, which is why the dry-run list is shown first.
 - "Move to Trash" doesn't free space until you empty the Trash (which the Cleanup tab can do).
 
+## AI assistance
+
+This project was written with the help of AI (Claude, by Anthropic), under human direction. As with any tool that deletes files and changes system settings, read the confirmation dialogs and use the dry-run options before trusting it with data you care about.
+
 ## License
 
 LinuxWard is licensed under the [Mozilla Public License 2.0](LICENSE).
