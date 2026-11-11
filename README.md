@@ -153,7 +153,7 @@ then add it to the list in `scan_all`.
 
 ## AI assistance
 
-This project was written with the help of AI (Claude, by Anthropic), under human direction. As with any tool that deletes files and changes system settings, read the confirmation dialogs and use the dry-run options before trusting it with data you care about.
+This project was written with the help of AI (Claude, by Anthropic), under human direction. As with any tool that deletes files and changes system settings, preview first: `linuxward --scan` and `linuxward --clean --dry-run` change nothing, and package removals show a preview of everything affected before you confirm.
 
 ## License
 
