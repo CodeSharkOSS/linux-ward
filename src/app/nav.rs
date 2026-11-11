@@ -21,6 +21,7 @@ pub(super) enum Tab {
     Ports,
     Java,
     Performance,
+    Disks,
     Security,
     Processes,
 }
@@ -47,7 +48,7 @@ impl Section {
             Section::FreeSpace => &[Tab::Cleanup, Tab::LargeFiles, Tab::Duplicates],
             Section::Software => &[Tab::Packages, Tab::Services],
             Section::Developer => &[Tab::Projects, Tab::Ports, Tab::Java],
-            Section::Health => &[Tab::Performance, Tab::Security, Tab::Processes],
+            Section::Health => &[Tab::Performance, Tab::Disks, Tab::Security, Tab::Processes],
         }
     }
 }
@@ -71,6 +72,7 @@ impl Tab {
             Tab::Ports => "🔌",
             Tab::Java => "☕",
             Tab::Performance => "🚀",
+            Tab::Disks => "💽",
             Tab::Security => "🔑",
             Tab::Processes => "🔍",
         }
@@ -87,6 +89,7 @@ impl Tab {
             Tab::Ports => "Open ports",
             Tab::Java => "Java",
             Tab::Performance => "Health & speed",
+            Tab::Disks => "Disks & filesystems",
             Tab::Security => "Security",
             Tab::Processes => "Suspect processes",
         }
@@ -107,6 +110,7 @@ impl Tab {
             Tab::Performance => {
                 "Boot time, startup items, kernels, tuning and system health checks"
             }
+            Tab::Disks => "Drive SMART health, filesystem checks and repairs, fstab and kernel-log errors",
             Tab::Security => "Find files that may hold secrets, and permission mistakes",
             Tab::Processes => {
                 "Running programs that look unusual: deleted or /tmp executables, imitated names, hidden processes"

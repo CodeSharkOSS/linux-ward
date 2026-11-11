@@ -11,6 +11,7 @@ use egui_extras::{Column, TableBuilder};
 mod cleanup_ui;
 mod confirm_ui;
 mod dev_ui;
+mod disks_ui;
 mod dupes_ui;
 mod java_ui;
 mod large_ui;
@@ -56,6 +57,9 @@ enum Msg {
     ReloadPerf,
     Live(Box<perf::Live>),
     Health(Box<perf::HealthResult>),
+    FsReport(Box<crate::fshealth::Report>),
+    /// A repair ran: the last disk scan no longer describes the system.
+    FsStale,
     HealthDone,
     Diff(PathBuf, String),
     Preview {
@@ -238,6 +242,9 @@ pub struct App {
     live_pending: bool,
     health: Vec<perf::HealthResult>,
     health_running: bool,
+    fs_report: Option<crate::fshealth::Report>,
+    fs_scanning: bool,
+    fs_stale: bool,
     diffs: HashMap<PathBuf, String>,
     sel_kernels: HashSet<String>,
     sel_left: HashSet<PathBuf>,
@@ -338,6 +345,9 @@ impl App {
             live_pending: false,
             health: vec![],
             health_running: false,
+            fs_report: None,
+            fs_scanning: false,
+            fs_stale: false,
             diffs: HashMap::new(),
             sel_kernels: HashSet::new(),
             sel_left: HashSet::new(),
@@ -584,6 +594,11 @@ impl App {
                 }
                 Msg::Health(h) => self.health.push(*h),
                 Msg::HealthDone => self.health_running = false,
+                Msg::FsReport(r) => {
+                    self.fs_scanning = false;
+                    self.fs_report = Some(*r);
+                }
+                Msg::FsStale => self.fs_stale = true,
                 Msg::Diff(path, text) => {
                     self.diffs.insert(path, text);
                 }
@@ -683,6 +698,7 @@ impl eframe::App for App {
             Tab::Performance => self.performance_tab(ui),
             Tab::Services => self.services_tab(ui),
             Tab::Java => self.java_tab(ui),
+            Tab::Disks => self.disks_tab(ui),
         });
         let ctx = ui.ctx().clone();
         self.confirm_dialog(&ctx);

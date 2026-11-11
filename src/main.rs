@@ -4,6 +4,7 @@ mod app;
 mod clam;
 mod devclean;
 mod dupes;
+mod fshealth;
 mod java;
 mod perf;
 mod pkg;

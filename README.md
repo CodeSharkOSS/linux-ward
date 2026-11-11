@@ -11,7 +11,7 @@ The tabs are grouped into four sections along the top:
 | 💾 Free space | Quick clean · Large files · Duplicates |
 | 📦 Software | Packages · Services |
 | 🛠 Developer | Dev cleanup · Open ports · Java |
-| 🩺 Health & security | Health & speed · Security · Suspect processes |
+| 🩺 Health & security | Health & speed · Disks & filesystems · Security · Suspect processes |
 
 **Quick clean**
 - Disk usage bars for every real mounted filesystem.
@@ -62,6 +62,17 @@ The tabs are grouped into four sections along the top:
 - Installed kernels (remove old ones), and config files left over from package upgrades.
 - Health checks: package integrity, failed services, firewall status and pending security updates.
 
+**Disks & filesystems**
+- One **Scan** (one password prompt, nothing is changed) reads every drive's SMART health with `smartctl` and checks each ext2/3/4, XFS, Btrfs and FAT filesystem, `/etc/fstab` (`findmnt --verify`) and this boot's kernel log for disk and filesystem errors.
+- Drives: the health verdict, reallocated/unreadable sectors, cable (CRC) errors, heat, SSD/NVMe wear and spare capacity, and the last self-test. SMART is switched on and short/long self-tests started from the tab. A drive that reports it is failing is flagged with the advice to back up and replace it: no software can repair that, so none is offered.
+- Filesystems: ext recorded errors and unclean state, Btrfs device error counters, FAT dirty bit, and filesystems the kernel remounted read-only.
+- Repairs, each behind a confirmation that shows the exact commands:
+  - ext: read-only check or `e2fsck -fy`; XFS: `xfs_repair` or online `xfs_scrub`; FAT: `fsck.fat -a`; Btrfs: scrub, and resetting error counters.
+  - A mounted filesystem is unmounted first (aborting if something is using it), repaired and mounted again only if the repair finished cleanly. The root filesystem and other system mounts are never unmounted: ext gets a check at the next boot (with `grubby`), otherwise the tab says to use a live USB.
+  - `/etc/fstab`: create a missing mount folder, reload systemd, or add `nofail` to an entry whose device is missing (a backup is kept at `/etc/fstab.linuxward.bak`).
+  - `btrfs check --repair` and `xfs_repair -L` are deliberately not offered: they can destroy filesystems that are otherwise recoverable.
+- Needs `smartmontools` for SMART; each filesystem tool is only used if installed.
+
 **Services**
 - Every running systemd service (system or your session) with a plain-language description, memory use and boot state.
 - Select one for details, its configuration files (click to open) and Restart / Stop / Disable, each behind a confirmation. Essential services are protected.
@@ -87,7 +98,7 @@ linuxward --clean            # run them (e.g. from cron)
 
 ## Build
 
-You need Rust 1.85+ (2024 edition) — install with [rustup](https://rustup.rs).
+You need Rust 1.95 (2024 edition) — install with [rustup](https://rustup.rs).
 
 ```sh
 cargo build --release
@@ -124,10 +135,11 @@ cargo test -- --ignored --nocapture   # also queries your real package manager (
 | `src/main.rs` | Window setup and the command-line modes (`--scan`, `--clean`) |
 | `src/app.rs` | Application state, the message channel from background threads, the activity log |
 | `src/app/nav.rs` | The grouped tab bar |
-| `src/app/*_ui.rs` | One file per tab (cleanup, packages, large files, duplicates, security, dev, services, perf, java) plus the confirmation dialog |
+| `src/app/*_ui.rs` | One file per tab (cleanup, packages, large files, duplicates, security, dev, services, perf, disks, java) plus the confirmation dialog |
 | `src/targets.rs` | Each cleanup target: how to measure it and how to clean it |
 | `src/pkg.rs` | apt / dnf / pacman / zypper: list, orphans, conflicts, dry-run, remove; protected-package list |
 | `src/devclean.rs` | Build artifacts, toolchains, IDE and Android leftovers, git housekeeping |
+| `src/fshealth.rs` | SMART and filesystem health: scan, parsers and the repair commands for each finding |
 | `src/secscan.rs`, `src/dupes.rs`, `src/ports.rs` | Secret scan, duplicate finder, listening-port list |
 | `src/perf.rs`, `src/java.rs`, `src/services.rs` | Performance diagnostics, JVM analysis, systemd services |
 | `src/util.rs` | Disk usage, size formatting, command running, `pkexec` batching, exclusions, action log |

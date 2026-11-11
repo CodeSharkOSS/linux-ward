@@ -40,6 +40,7 @@ impl App {
         self.busy = Some(format!("{title}…"));
         // The reboot reminder only makes sense for system tuning, not for deleting build folders.
         let reboot_hint = self.tab == Tab::Performance;
+        let disks = self.tab == Tab::Disks;
         let n = self.notifier();
         std::thread::spawn(move || {
             let targets: Vec<Target> = actions
@@ -62,7 +63,7 @@ impl App {
                 "Done.".into()
             }));
             n.send(Msg::Done { refresh: true });
-            n.send(Msg::ReloadPerf);
+            n.send(if disks { Msg::FsStale } else { Msg::ReloadPerf });
         });
     }
 
