@@ -122,7 +122,7 @@ impl App {
         let accent = ui.visuals().selection.bg_fill;
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.heading("🧹 Disk Cleaner");
+            ui.heading("🧹 LinuxWard");
             ui.add_space(14.0);
             let current = self.tab.section();
             for s in Section::ALL {

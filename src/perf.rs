@@ -1343,9 +1343,9 @@ pub struct FstabIssue {
     pub reason: &'static str,
 }
 
-const FSTAB_BAK: &str = "/etc/fstab.diskclean.bak";
+const FSTAB_BAK: &str = "/etc/fstab.linuxward.bak";
 const PPD_CONF: &str = "/etc/tuned/ppd.conf";
-const PPD_BAK: &str = "/etc/tuned/ppd.conf.diskclean.bak";
+const PPD_BAK: &str = "/etc/tuned/ppd.conf.linuxward.bak";
 
 /// Copy `src` to `dst` unless a backup already exists, so applying a fix twice never overwrites the original with an edited copy.
 fn backup_cmd(src: &str, dst: &str) -> Vec<String> {
@@ -1518,8 +1518,8 @@ fn software_renderer() -> bool {
 
 // --- VM latency tuning ---
 
-const VM_IO_RULE: &str = "/etc/udev/rules.d/60-diskclean-vm-io.rules";
-const VM_SYSCTL: &str = "/etc/sysctl.d/99-diskclean-vm.conf";
+const VM_IO_RULE: &str = "/etc/udev/rules.d/60-linuxward-vm-io.rules";
+const VM_SYSCTL: &str = "/etc/sysctl.d/99-linuxward-vm.conf";
 
 /// Shell-free "write this text to this file" command (content and path are passed as arguments, never interpolated).
 fn write_file_cmd(path: &str, content: &str) -> Vec<String> {
@@ -1599,7 +1599,7 @@ fn vm_latency_recs(
     // I/O scheduler.
     let disks = disks_needing_none();
     if !disks.is_empty() {
-        let rule = "# Written by diskclean: the hypervisor already schedules I/O, so skip the guest scheduler.\nACTION==\"add|change\", SUBSYSTEM==\"block\", ENV{DEVTYPE}==\"disk\", KERNEL==\"vd*|sd*|xvd*|nvme*n*\", ATTR{queue/scheduler}=\"none\"\n";
+        let rule = "# Written by linuxward: the hypervisor already schedules I/O, so skip the guest scheduler.\nACTION==\"add|change\", SUBSYSTEM==\"block\", ENV{DEVTYPE}==\"disk\", KERNEL==\"vd*|sd*|xvd*|nvme*n*\", ATTR{queue/scheduler}=\"none\"\n";
         let mut cmds = vec![write_file_cmd(VM_IO_RULE, rule)];
         cmds.extend(disks.iter().map(|d| {
             vec![
@@ -1633,7 +1633,7 @@ fn vm_latency_recs(
     );
     if !tuned && !want.is_empty() && !Path::new(VM_SYSCTL).exists() {
         let conf: String = std::iter::once(
-            "# Written by diskclean: smoother disk write-back in a VM.\n".to_string(),
+            "# Written by linuxward: smoother disk write-back in a VM.\n".to_string(),
         )
         .chain(want.iter().map(|(k, v)| format!("{k} = {v}\n")))
         .collect();
@@ -1697,14 +1697,14 @@ pub fn disable_cmds(units: &[&str], enabled: impl Fn(&str) -> bool) -> Vec<Vec<S
     let mut record = strs(&[
         "sh",
         "-c",
-        "mkdir -p /etc/diskclean && printf '%s\\n' \"$@\" >> /etc/diskclean/disabled-services",
+        "mkdir -p /etc/linuxward && printf '%s\\n' \"$@\" >> /etc/linuxward/disabled-services",
         "sh",
     ]);
     record.extend(all);
     vec![disable, verify, record]
 }
 
-const PREV_MARK: &str = "# diskclean-previous-profile=";
+const PREV_MARK: &str = "# linuxward-previous-profile=";
 
 fn profile_name_ok(n: &str) -> bool {
     !n.is_empty()
@@ -1721,13 +1721,13 @@ pub fn previous_profile(conf: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-const TUNED_DIR: &str = "/etc/tuned/profiles/diskclean-vm";
-const TUNED_PROFILE: &str = "diskclean-vm";
+const TUNED_DIR: &str = "/etc/tuned/profiles/linuxward-vm";
+const TUNED_PROFILE: &str = "linuxward-vm";
 
 /// A tuned profile that is `virtual-guest` plus our sysctl overrides (tuned re-applies its own sysctls at boot, so sysctl.d alone loses).
 pub fn tuned_profile_conf(sysctls: &[(&str, u32)], previous: &str) -> String {
     let mut s = String::from(
-        "[main]\nsummary=virtual-guest plus smoother write-back (written by diskclean)\ninclude=virtual-guest\n",
+        "[main]\nsummary=virtual-guest plus smoother write-back (written by linuxward)\ninclude=virtual-guest\n",
     );
     if profile_name_ok(previous) {
         s.push_str(&format!("{PREV_MARK}{previous}\n"));
@@ -1880,7 +1880,7 @@ fn build_recs(
                 tag: "Boot",
                 title: format!("Make {} mount(s) in /etc/fstab non-blocking", issues.len()),
                 detail: format!(
-                    "{}. Adds `{NOFAIL_OPTS}` so boot continues if they are unavailable. A backup is saved as /etc/fstab.diskclean.bak.",
+                    "{}. Adds `{NOFAIL_OPTS}` so boot continues if they are unavailable. A backup is saved as /etc/fstab.linuxward.bak.",
                     issues.iter().map(|i| format!("{} ({})", i.mount, i.reason)).collect::<Vec<_>>().join("; ")
                 ),
                 safe: true,
@@ -2064,9 +2064,9 @@ fn build_recs(
     (recs, findings)
 }
 
-// ----- undoing what diskclean changed -------------------------------------------------
+// ----- undoing what linuxward changed -------------------------------------------------
 
-/// A change diskclean made earlier, found from the files it left behind, with the commands that reverse it.
+/// A change linuxward made earlier, found from the files it left behind, with the commands that reverse it.
 #[derive(Clone)]
 pub struct Undo {
     pub title: String,
@@ -2074,10 +2074,10 @@ pub struct Undo {
     pub actions: Vec<Action>,
 }
 
-const DISABLED_LIST: &str = "/etc/diskclean/disabled-services";
+const DISABLED_LIST: &str = "/etc/linuxward/disabled-services";
 
 fn animations_marker_dir() -> PathBuf {
-    util::home().join(".config/diskclean")
+    util::home().join(".config/linuxward")
 }
 
 fn unit_name_ok(u: &str) -> bool {
@@ -2149,7 +2149,7 @@ pub fn undo_items() -> Vec<Undo> {
         v.push(Undo {
             title: "/etc/fstab changes".into(),
             detail: format!(
-                "Restores /etc/fstab from {FSTAB_BAK}, the copy taken {} before diskclean added `nofail`. Edits made to fstab since then (new disks, changed UUIDs) are lost, which can stop the machine booting. The file being replaced is kept as /etc/fstab.diskclean.before-undo.",
+                "Restores /etc/fstab from {FSTAB_BAK}, the copy taken {} before linuxward added `nofail`. Edits made to fstab since then (new disks, changed UUIDs) are lost, which can stop the machine booting. The file being replaced is kept as /etc/fstab.linuxward.before-undo.",
                 std::fs::metadata(FSTAB_BAK)
                     .and_then(|m| m.modified())
                     .ok()
@@ -2158,7 +2158,7 @@ pub fn undo_items() -> Vec<Undo> {
                     .unwrap_or_else(|| "earlier".into())
             ),
             actions: root(vec![
-                strs(&["sh", "-c", "cp -a -- /etc/fstab /etc/fstab.diskclean.before-undo && cp -a -- \"$1\" /etc/fstab.new && mv -f -- /etc/fstab.new /etc/fstab", "sh", FSTAB_BAK]),
+                strs(&["sh", "-c", "cp -a -- /etc/fstab /etc/fstab.linuxward.before-undo && cp -a -- \"$1\" /etc/fstab.new && mv -f -- /etc/fstab.new /etc/fstab", "sh", FSTAB_BAK]),
                 strs(&["systemctl", "daemon-reload"]),
             ]),
         });
@@ -2224,7 +2224,7 @@ pub struct Snapshot {
     pub recs: Vec<Rec>,
     /// Problems found that can't be fixed from inside this machine.
     pub findings: Vec<Finding>,
-    /// Earlier diskclean changes that can be reverted.
+    /// Earlier linuxward changes that can be reverted.
     pub undos: Vec<Undo>,
 }
 
@@ -2325,7 +2325,7 @@ mod tests {
             vec!["UUID=cccc", "vmhgfs-fuse"]
         );
         // Apply the generated sed expression for real.
-        let dir = std::env::temp_dir().join(format!("diskclean-fstab-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("linuxward-fstab-{}", std::process::id()));
         std::fs::write(&dir, tab).unwrap();
         let expr = fstab_sed("vmhgfs-fuse").unwrap();
         let out = run("sed", &["-E", &expr, dir.to_str().unwrap()]);
@@ -2386,7 +2386,7 @@ mod tests {
         assert!(ppd_remap_cmds("a/b;x")[2][3].contains("(balanced)="));
         // Run the generated sed for real: only the [profiles] section may change.
         let conf = "[profiles]\npower-saver=powersave\nbalanced=balanced\nperformance=throughput-performance\n\n[battery]\nbalanced=balanced-battery\n";
-        let f = std::env::temp_dir().join(format!("diskclean-ppd-{}", std::process::id()));
+        let f = std::env::temp_dir().join(format!("linuxward-ppd-{}", std::process::id()));
         std::fs::write(&f, conf).unwrap();
         for c in ppd_remap_cmds("performance")
             .iter()
@@ -2405,7 +2405,7 @@ mod tests {
         let out = std::fs::read_to_string(&f).unwrap();
         let _ = std::fs::remove_file(&f);
         assert!(
-            out.contains("balanced=balanced\nperformance=diskclean-vm\n"),
+            out.contains("balanced=balanced\nperformance=linuxward-vm\n"),
             "{out}"
         );
         assert!(

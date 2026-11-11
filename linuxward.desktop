@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=LinuxWard
+Comment=Clean, secure and tune your Linux system
+Exec=linuxward
+Icon=drive-harddisk
+Terminal=false
+Categories=System;Utility;
+Keywords=clean;cache;packages;security;performance;space;
+StartupWMClass=linuxward

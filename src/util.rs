@@ -132,7 +132,7 @@ fn config_dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home().join(".config"))
-        .join("diskclean")
+        .join("linuxward")
 }
 
 fn exclude_list() -> &'static [PathBuf] {
@@ -151,7 +151,7 @@ fn exclude_list() -> &'static [PathBuf] {
     })
 }
 
-/// Paths listed (one per line, `#` comments) in `~/.config/diskclean/exclude`. Every scan skips
+/// Paths listed (one per line, `#` comments) in `~/.config/linuxward/exclude`. Every scan skips
 /// them and nothing inside them is deleted.
 pub fn excluded(path: &Path) -> bool {
     exclude_list().iter().any(|p| path.starts_with(p))
@@ -162,7 +162,7 @@ pub fn contains_excluded(path: &Path) -> bool {
     exclude_list().iter().any(|p| p.starts_with(path))
 }
 
-/// Append a line to `~/.local/state/diskclean/actions.log` (best effort). The file is opened once.
+/// Append a line to `~/.local/state/linuxward/actions.log` (best effort). The file is opened once.
 pub fn log_action(line: &str) {
     use std::sync::{Mutex, OnceLock};
     static FILE: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
@@ -170,7 +170,7 @@ pub fn log_action(line: &str) {
         let dir = std::env::var_os("XDG_STATE_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home().join(".local/state"))
-            .join("diskclean");
+            .join("linuxward");
         let _ = std::fs::create_dir_all(&dir);
         Mutex::new(
             std::fs::OpenOptions::new()
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn clear_dir() {
-        let d = std::env::temp_dir().join(format!("diskclean-test-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("linuxward-test-{}", std::process::id()));
         std::fs::create_dir_all(d.join("sub/deep")).unwrap();
         std::fs::write(d.join("a.bin"), vec![1u8; 100_000]).unwrap();
         std::fs::write(d.join("sub/deep/b.bin"), vec![1u8; 50_000]).unwrap();

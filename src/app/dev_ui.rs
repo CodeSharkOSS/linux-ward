@@ -85,7 +85,7 @@ impl App {
             } else if ui.button("Scan").clicked() {
                 scan = true;
             }
-            ui.label(RichText::new("Finds build output, old toolchains and git housekeeping. Folders listed in ~/.config/diskclean/exclude are skipped.").weak().size(12.0));
+            ui.label(RichText::new("Finds build output, old toolchains and git housekeeping. Folders listed in ~/.config/linuxward/exclude are skipped.").weak().size(12.0));
         });
 
         let art_sel: u64 = self

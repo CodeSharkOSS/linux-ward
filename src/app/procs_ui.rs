@@ -23,7 +23,7 @@ impl App {
         }
         let exe = std::env::current_exe()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "diskclean".into());
+            .unwrap_or_else(|_| "linuxward".into());
         let home = util::home().display().to_string();
         std::thread::spawn(move || {
             let out =

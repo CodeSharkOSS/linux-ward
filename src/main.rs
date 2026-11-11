@@ -17,11 +17,11 @@ mod util;
 fn main() -> eframe::Result {
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "diskclean — free disk space and keep a Linux system tidy\n\n\
-             USAGE:\n  diskclean            open the window\n  diskclean --scan     print what could be reclaimed, change nothing\n  \
-             diskclean --clean [--dry-run]\n                       run the safe, pre-selected cleanups that need no password\n                       (Trash, crash-free caches...); --dry-run only lists them\n\n\
-             Folders listed in ~/.config/diskclean/exclude (one per line) are skipped by every scan.\n\
-             Actions are logged to ~/.local/state/diskclean/actions.log"
+            "linuxward — free disk space and keep a Linux system tidy\n\n\
+             USAGE:\n  linuxward            open the window\n  linuxward --scan     print what could be reclaimed, change nothing\n  \
+             linuxward --clean [--dry-run]\n                       run the safe, pre-selected cleanups that need no password\n                       (Trash, crash-free caches...); --dry-run only lists them\n\n\
+             Folders listed in ~/.config/linuxward/exclude (one per line) are skipped by every scan.\n\
+             Actions are logged to ~/.local/state/linuxward/actions.log"
         );
         return Ok(());
     }
@@ -49,20 +49,20 @@ fn main() -> eframe::Result {
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Disk Cleaner")
-            .with_app_id("diskclean")
+            .with_title("LinuxWard")
+            .with_app_id("linuxward")
             .with_inner_size([980.0, 720.0])
             .with_min_inner_size([640.0, 420.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "Disk Cleaner",
+        "LinuxWard",
         options,
         Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
     )
 }
 
-/// `diskclean --clean [--dry-run]`: run the targets that are pre-selected as safe and need no
+/// `linuxward --clean [--dry-run]`: run the targets that are pre-selected as safe and need no
 /// administrator rights. Nothing is deleted with --dry-run.
 fn clean_cli(dry_run: bool) {
     use util::human;
@@ -92,7 +92,7 @@ fn clean_cli(dry_run: bool) {
     });
 }
 
-/// `diskclean --scan`: print what the GUI would show, without changing anything.
+/// `linuxward --scan`: print what the GUI would show, without changing anything.
 fn scan_report() {
     use util::human;
     for d in util::disks() {

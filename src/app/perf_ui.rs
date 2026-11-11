@@ -187,7 +187,7 @@ impl App {
                 }
                 ui.add_space(6.0);
                 if !s.undos.is_empty() {
-                    egui::CollapsingHeader::new(RichText::new(format!("↩ Changes made by diskclean ({}) – undo", s.undos.len())).strong()).id_salt("perf-undo")
+                    egui::CollapsingHeader::new(RichText::new(format!("↩ Changes made by linuxward ({}) – undo", s.undos.len())).strong()).id_salt("perf-undo")
                         .default_open(false)
                         .show(ui, |ui| {
                             for u in &s.undos {

@@ -285,16 +285,16 @@ fn has_property(text: &str, key: &str) -> bool {
 }
 
 /// Shell command (as argv) that writes `content` to `path` safely: symlinks are followed so the real
-/// file is edited, the very first version is kept once as `.diskclean.bak` (a later edit never
+/// file is edited, the very first version is kept once as `.linuxward.bak` (a later edit never
 /// overwrites that original), the write is aborted if the backup fails, and the new text replaces the
 /// file atomically with the old file's permissions.
 pub fn write_file_cmd(path: &Path, content: &str) -> Vec<String> {
     let script = r#"p=$(readlink -f -- "$1" 2>/dev/null || printf '%s' "$1")
 mkdir -p -- "$(dirname -- "$p")" || exit 1
-if [ -e "$p" ] && [ ! -e "$p.diskclean.bak" ]; then cp -p -- "$p" "$p.diskclean.bak" || { echo "could not back up $p; nothing changed" >&2; exit 1; }; fi
-printf '%s' "$2" > "$p.diskclean.new" || exit 1
-if [ -e "$p" ]; then chmod --reference="$p" -- "$p.diskclean.new" 2>/dev/null; fi
-mv -f -- "$p.diskclean.new" "$p""#;
+if [ -e "$p" ] && [ ! -e "$p.linuxward.bak" ]; then cp -p -- "$p" "$p.linuxward.bak" || { echo "could not back up $p; nothing changed" >&2; exit 1; }; fi
+printf '%s' "$2" > "$p.linuxward.new" || exit 1
+if [ -e "$p" ]; then chmod --reference="$p" -- "$p.linuxward.new" 2>/dev/null; fi
+mv -f -- "$p.linuxward.new" "$p""#;
     vec![
         "sh".into(),
         "-c".into(),
@@ -1042,7 +1042,7 @@ mod tests {
 
     #[test]
     fn write_cmd_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("diskclean-java-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("linuxward-java-{}", std::process::id()));
         let file = dir.join("sub/x.vmoptions");
         let cmd = write_file_cmd(&file, "line one\n-Xmx1g with 'quotes'\n");
         let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
@@ -1056,7 +1056,7 @@ mod tests {
         let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
         assert!(run(&cmd[0], &args).ok);
         assert_eq!(
-            std::fs::read_to_string(dir.join("sub/x.vmoptions.diskclean.bak")).unwrap(),
+            std::fs::read_to_string(dir.join("sub/x.vmoptions.linuxward.bak")).unwrap(),
             "line one\n-Xmx1g with 'quotes'\n"
         );
         let _ = std::fs::remove_dir_all(&dir);

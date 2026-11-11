@@ -1,6 +1,6 @@
-# Disk Cleaner
+# LinuxWard
 
-A small Linux desktop app, written in Rust with [egui/eframe](https://github.com/emilk/egui), for freeing disk space and removing packages.
+A small Linux desktop app, written in Rust with [egui/eframe](https://github.com/emilk/egui), to clean up disk space, manage packages, scan for exposed secrets and suspicious processes, and tune system performance.
 
 ## Features
 
@@ -77,13 +77,13 @@ Supported package managers: **apt** (Debian/Ubuntu/Mint/Pop!_OS), **dnf** (Fedor
 ## Command line and configuration
 
 ```sh
-diskclean --scan             # print what could be reclaimed
-diskclean --clean --dry-run  # list the safe, password-free cleanups it would run
-diskclean --clean            # run them (e.g. from cron)
+linuxward --scan             # print what could be reclaimed
+linuxward --clean --dry-run  # list the safe, password-free cleanups it would run
+linuxward --clean            # run them (e.g. from cron)
 ```
 
-- `~/.config/diskclean/exclude`: one folder per line (`~/` allowed, `#` comments). Every scan skips them, and nothing inside them (or containing them) is ever deleted by a cleanup.
-- `~/.local/state/diskclean/actions.log`: a timestamped record of everything the app did.
+- `~/.config/linuxward/exclude`: one folder per line (`~/` allowed, `#` comments). Every scan skips them, and nothing inside them (or containing them) is ever deleted by a cleanup.
+- `~/.local/state/linuxward/actions.log`: a timestamped record of everything the app did.
 
 ## Build
 
@@ -91,7 +91,7 @@ You need Rust 1.85+ (2024 edition) — install with [rustup](https://rustup.rs).
 
 ```sh
 cargo build --release
-./target/release/diskclean
+./target/release/linuxward
 ```
 
 No system development libraries are needed to compile; at runtime it uses your desktop's X11 or Wayland and OpenGL, which any desktop install has.
@@ -102,13 +102,13 @@ For the root actions you need polkit's `pkexec` (installed by default on GNOME, 
 
 ```sh
 cargo build --release
-install -Dm755 target/release/diskclean ~/.local/bin/diskclean
-install -Dm644 diskclean.desktop ~/.local/share/applications/diskclean.desktop
+install -Dm755 target/release/linuxward ~/.local/bin/linuxward
+install -Dm644 linuxward.desktop ~/.local/share/applications/linuxward.desktop
 ```
 
 ## Terminal report
 
-`diskclean --scan` prints the disks, largest packages and reclaimable items without changing anything — handy for checking detection on a new distro.
+`linuxward --scan` prints the disks, largest packages and reclaimable items without changing anything — handy for checking detection on a new distro.
 
 ## Tests
 
@@ -153,4 +153,4 @@ then add it to the list in `scan_all`.
 
 ## License
 
-Disk Cleaner is licensed under the [Mozilla Public License 2.0](LICENSE).
+LinuxWard is licensed under the [Mozilla Public License 2.0](LICENSE).

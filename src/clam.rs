@@ -143,7 +143,7 @@ fn write_private_temp(text: &str) -> std::io::Result<std::path::PathBuf> {
         .unwrap_or(0);
     for attempt in 0..20 {
         let path = std::env::temp_dir().join(format!(
-            "diskclean-clam-{}-{nanos}-{attempt}.txt",
+            "linuxward-clam-{}-{nanos}-{attempt}.txt",
             std::process::id()
         ));
         match std::fs::OpenOptions::new()
